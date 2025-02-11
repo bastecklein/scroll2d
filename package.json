@@ -1,0 +1,40 @@
+{
+    "name": "scroll2d",
+    "version": "1.0.0",
+    "description": "A javascript software game scrollable 2d tilemap rendering engine supporting standard and isometric tiles.",
+    "scripts": {
+        "build": "webpack --config webpack.common.cjs"
+    },
+    "keywords": ["engine", "library", "ape apps", "module", "game", "mode7"],
+    "homepage": "https://www.ape-apps.com",
+    "bugs": {
+        "email": "support@ape-apps.com"
+    },
+    "author": {
+        "name": "Ape Apps",
+        "email": "support@ape-apps.com",
+        "url": "https://www.ape-apps.com"
+    },
+    "funding": {
+        "type": "patreon",
+        "url": "https://www.patreon.com/apeapps"
+    },
+    "license": "Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/bastecklein/scroll2d"
+    },
+    "main": "src/index.js",
+    "config": {},
+    "dependencies": {
+        "common-helpers": "git+ssh://git@github.com:bastecklein/common-helpers.git#main",
+        "input-helper": "git+ssh://git@github.com:bastecklein/input-helper.git#main",
+        "particles2": "git+ssh://git@github.com:bastecklein/particles2.git#main"
+    },
+    "devDependencies": {
+        "webpack": "*",
+        "webpack-cli": "*"
+    },
+    "private": false,
+    "type": "module"
+}
