@@ -29,7 +29,7 @@ export function getInstance(options) {
     return engine;
 }
 
-class Scroll2dEngine {
+export class Scroll2dEngine {
     constructor(options) {
 
         const instance = this;
@@ -251,15 +251,15 @@ class Scroll2dEngine {
         clearElementForTouch(this.canvas);
 
         handleInput({
-            element: this.filterOverlay,
+            element: instance.filterOverlay,
             down: function(e) {
-                onInstanceDown(this, e);
+                onInstanceDown(instance, e);
             },
             move: function(e) {
-                onInstanceMove(this, e);
+                onInstanceMove(instance, e);
             },
             up: function(e) {
-                onInstanceUp(this, e);
+                onInstanceUp(instance, e);
             }
         });
 
@@ -3973,7 +3973,9 @@ function getFreshLightInstruction(x,y,r,c,i) {
 export default {
     getInstance,
     globalResize,
-    hexToRgb
+    hexToRgb,
+    Scroll2dEngine,
+    Chevron
 };
 
 requestAnimationFrame(globalRender);
