@@ -275,7 +275,7 @@ export class Scroll2dEngine {
         this.gamepadAllStop();
 
         setTimeout(function() {
-            this.running = true;
+            instance.running = true;
             instance.resize();
         }, 200);
     }
