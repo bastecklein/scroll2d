@@ -1035,15 +1035,15 @@ class Coord {
         if(instance) {
             if(instance.isometricMode) {
                 this.px = ((x + instance.viewX) / instance.halfRelativeGridSize + (y + instance.viewY) / instance.quarterRelativeGridSize) / 2;
-                this.py = ((y + instance.viewY) / instance.quarterRelativeGridSize - (x + instance.viewX) / instance.halfRelativeGridSize) / 2;
+                thise.py = ((y + instance.viewY) / instance.quarterRelativeGridSize - (x + instance.viewX) / instance.halfRelativeGridSize) / 2;
             } else {
                 this.px = (x + instance.viewX) / instance.relativeGridSize;
                 this.py = (y + instance.viewY) / instance.relativeGridSize;
             }
         }
 
-        this.px = Math.floor(this.px);
-        this.py = Math.floor(this.py);
+        this.x = Math.floor(this.px);
+        this.y = Math.floor(this.py);
     }
 }
 
