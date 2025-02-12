@@ -1517,9 +1517,7 @@ function onInstanceDown(engine, e) {
     let oy = y;
 
     engine.didAMove = false;
-    engine.didMove = false;
-    engine.isDown = true;
-    engine.isHold = false;
+    
 
     if(e.type == "touch") {
         engine.usingTouch = true;
@@ -1560,6 +1558,9 @@ function onInstanceDown(engine, e) {
 
     engine.startX = x;
     engine.startY = y;
+    engine.didMove = false;
+    engine.isDown = true;
+    engine.isHold = false;
 
     if(engine.holdFunction || engine.selectionFunction) {
         engine.holdX = x;
@@ -1657,7 +1658,7 @@ function onInstanceMove(engine, e) {
         engine.hoverFunction(position.x, position.y, engine.actualX, engine.actualY, e.type, position.px, position.py);
     }
 
-    if(!engine.isDown || !engine.isHold) {
+    if(!engine.isDown || engine.isHold) {
         return;
     }
 
@@ -1700,7 +1701,13 @@ function onInstanceMove(engine, e) {
     } else {
         const dist = distBetweenPoints(engine.startX, engine.startY, x, y);
 
-        if(dist > 12) {
+        let moveMax = 6;
+
+        if(engine.usingTouch) {
+            moveMax = 12;
+        }
+
+        if(dist > moveMax) {
             engine.didMove = true;
 
             if(engine.holdTimer) {
