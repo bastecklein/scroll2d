@@ -1035,7 +1035,7 @@ class Coord {
         if(instance) {
             if(instance.isometricMode) {
                 this.px = ((x + instance.viewX) / instance.halfRelativeGridSize + (y + instance.viewY) / instance.quarterRelativeGridSize) / 2;
-                thise.py = ((y + instance.viewY) / instance.quarterRelativeGridSize - (x + instance.viewX) / instance.halfRelativeGridSize) / 2;
+                this.py = ((y + instance.viewY) / instance.quarterRelativeGridSize - (x + instance.viewX) / instance.halfRelativeGridSize) / 2;
             } else {
                 this.px = (x + instance.viewX) / instance.relativeGridSize;
                 this.py = (y + instance.viewY) / instance.relativeGridSize;
@@ -1554,11 +1554,6 @@ function onInstanceDown(engine, e) {
         engine.usingMouse = false;
     }
 
-    const offset = getElementOffset(engine.canvas);
-
-    x -= offset.left;
-    y -= offset.top;
-
     if(engine.pointerListener) {
         engine.pointerListener("down", x, y, e.type, e.which);
     }
@@ -1626,10 +1621,8 @@ function onInstanceMove(engine, e) {
         engine.usingMouse = false;
     }
 
-    const offset = getElementOffset(engine.canvas);
-
-    let x = e.x - offset.left;
-    let y = e.y - offset.top;
+    let x = e.x;
+    let y = e.y;
 
     if(engine.pointerListener) {
         engine.pointerListener("move", x, y, e.type, e.which);
@@ -1893,15 +1886,6 @@ function handlePinch(engine) {
         engine.doZoom(false);
         engine.lastDistance = dist;
     }
-}
-
-function getElementOffset(element) {
-    const rect = element.getBoundingClientRect();
-
-    return {
-        left: rect.left + window.scrollX,
-        top: rect.top + window.scrollY
-    };
 }
 
 function processSelection(engine) {
