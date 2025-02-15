@@ -3979,8 +3979,8 @@ function getFreshLightInstruction(x,y,r,c,i) {
     }
 }
 
-function pixelateCanvas(canvas) {
-    canvas.screenshotCanvas.style.imageRendering = "pixelated";
+export function pixelateCanvas(canvas) {
+    canvas.style.imageRendering = "pixelated";
     
     const ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = false;
@@ -3994,7 +3994,8 @@ export default {
     globalResize,
     hexToRgb,
     Scroll2dEngine,
-    Chevron
+    Chevron,
+    pixelateCanvas
 };
 
 requestAnimationFrame(globalRender);
