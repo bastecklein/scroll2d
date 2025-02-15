@@ -65,6 +65,7 @@ export class Scroll2dEngine {
         this.instructionsRecieved = false;
         this.doubleHeightTiles = options.doubleHeightTiles || false;
         this.useFastRenderMode = options.fastRenderMode || false;
+        this.pixelated = options.pixelated || false;
 
         this.fullMapRenderCallback = null;
 
@@ -244,6 +245,15 @@ export class Scroll2dEngine {
         this.lightFinalRenderContext = this.lightFinalRenderCanvas.getContext("2d");
         this.preRenderContext = this.preRenderCanvas.getContext("2d");
         this.gradientFilterContext = this.gradientFilterCanvas.getContext("2d");
+
+        if(this.pixelated) {
+            pixelateCanvas(this.canvas);
+            pixelateCanvas(this.staticCanvas);
+            pixelateCanvas(this.lightCanvas);
+            pixelateCanvas(this.lightFinalRenderCanvas);
+            pixelateCanvas(this.preRenderCanvas);
+            pixelateCanvas(this.gradientFilterCanvas);
+        }
 
         this.holder.appendChild(this.canvas);
         this.holder.appendChild(this.filterOverlay);
@@ -958,6 +968,10 @@ export class Scroll2dEngine {
         this.screenshotCanvas = document.createElement("canvas");
         this.screenshotContext = this.screenshotCanvas.getContext("2d");
 
+        if(this.pixelated) {
+            pixelateCanvas(this.screenshotCanvas);
+        }
+
         this.screenshotCanvas.width = this.width;
         this.screenshotCanvas.height = this.height;
 
@@ -1244,6 +1258,10 @@ function renderScrollInstance(engine, delta) {
 
         fullCanvas = document.createElement("canvas");
         fullContext = fullCanvas.getContext("2d");
+
+        if(engine.pixelated) {
+            pixelateCanvas(fullCanvas);
+        }
 
         fullCanvas.width = umapTotalWidth / 2;
         fullCanvas.height = umapTotalHeight / 2;
@@ -3959,6 +3977,16 @@ function getFreshLightInstruction(x,y,r,c,i) {
     } else {
         return new LightInstruction(x, y, r, c, i);
     }
+}
+
+function pixelateCanvas(canvas) {
+    canvas.screenshotCanvas.style.imageRendering = "pixelated";
+    
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.mozImageSmoothingEnabled = false;
+    ctx.webkitImageSmoothingEnabled = false;
+    ctx.msImageSmoothingEnabled = false;
 }
 
 export default {
