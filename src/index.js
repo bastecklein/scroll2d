@@ -44,6 +44,8 @@ export class Scroll2dEngine {
             this.autoScale = false;
         }
 
+        this.lastScale = this.scale;
+
         this.drawQueue = [];
         this.aboveFoldDrawQueue = [];
         this.textPoppers = [];
@@ -1244,6 +1246,12 @@ function renderScrollInstance(engine, delta) {
     if(engine.autoScale) {
         engine.scale = window.devicePixelRatio || 1;
     }
+
+    if(engine.scale != engine.lastScale) {
+        resizeInstance(engine);
+    }
+
+    engine.lastScale = engine.scale;
 
     engine.renderOrder = 0;
     engine.lightBlockers = [];

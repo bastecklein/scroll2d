@@ -1,6 +1,6 @@
 {
     "name": "scroll2d",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "A javascript software game scrollable 2d tilemap rendering engine supporting standard and isometric tiles.",
     "scripts": {
         "build": "webpack --config webpack.common.cjs"
