@@ -38,6 +38,12 @@ export class Scroll2dEngine {
 
         this.scale = options.scale || window.devicePixelRatio || 1;
 
+        this.autoScale = true;
+
+        if(options.scale) {
+            this.autoScale = false;
+        }
+
         this.drawQueue = [];
         this.aboveFoldDrawQueue = [];
         this.textPoppers = [];
@@ -1233,6 +1239,10 @@ function globalRender(t) {
 function renderScrollInstance(engine, delta) {
     if(!engine.running) {
         return;
+    }
+
+    if(engine.autoScale) {
+        engine.scale = window.devicePixelRatio || 1;
     }
 
     engine.renderOrder = 0;
