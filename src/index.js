@@ -2173,7 +2173,7 @@ function addToFullMap(engine, fullContext, img, x, y) {
 
 function performTextRender(engine, context, item, useX, useY) {
 
-    const fontSize = item.lineWidth * engine.zoomLevel;
+    const fontSize = (item.lineWidth * engine.zoomLevel) * engine.scale;
 
     context.setLineDash([]);
     context.textBaseline = "middle";
@@ -2184,7 +2184,7 @@ function performTextRender(engine, context, item, useX, useY) {
         fnt = "bold " + fontSize + "px " + item.textFont;
     }
 
-    drawStroked(context, fnt, item.color, item.barColor, item.isText, useX, useY, 2, engine.zoomLevel);
+    drawStroked(context, fnt, item.color, item.barColor, item.isText, useX * engine.scale, useY * engine.scale, 2 * engine.scale, engine.zoomLevel);
 }
 
 function drawStroked(ctx, font, fill, stroke, text, x, y, width, zoomLevel) {
@@ -2222,7 +2222,7 @@ function performLineRender(engine, context, item, useX, useY) {
     const useX2 = (0.5 + (item.w - engine.viewX)) | 0;
     const useY2 = (0.5 + (item.h - engine.viewY)) | 0;
 
-    context.lineWidth = item.lineWidth;
+    context.lineWidth = item.lineWidth * engine.scale;
     context.strokeStyle = item.color;
     context.globalAlpha = item.alpha;
 
@@ -2234,15 +2234,15 @@ function performLineRender(engine, context, item, useX, useY) {
 
     context.beginPath();
 
-    context.moveTo(useX, useY);
-    context.lineTo(useX2, useY2);
+    context.moveTo(useX * engine.scale, useY * engine.scale);
+    context.lineTo(useX2 * engine.scale, useY2 * engine.scale);
 
     context.stroke();
 }
 
 function performCircleRender(engine, context, item, useX, useY) {
     if(item.lineWidth > 0) {
-        context.lineWidth = item.lineWidth;
+        context.lineWidth = item.lineWidth * engine.scale;
         context.strokeStyle = item.color;
 
         if(item.dashedLine) {
@@ -2260,16 +2260,16 @@ function performCircleRender(engine, context, item, useX, useY) {
     
     if(engine.isometricMode) {
         context.ellipse(
-            useX, 
-            useY, 
-            item.h, 
-            (item.h / 2), 
+            useX * engine.scale, 
+            useY * engine.scale, 
+            item.h * engine.scale, 
+            (item.h / 2) * engine.scale, 
             0, 
             0, 
             TWO_π
         );
     } else {
-        context.ellipse(useX, useY, item.h, item.h, 0, 0, TWO_π);
+        context.ellipse(useX * engine.scale, useY * engine.scale, item.h * engine.scale, item.h * engine.scale, 0, 0, TWO_π);
     }
     
     if(item.lineWidth > 0) {
@@ -2299,10 +2299,10 @@ function performSquareRender(engine, context, item, useX, useY) {
         context.fill();
     } else {
         context.fillRect(
-            useX,
-            useY,
-            engine.relativeGridSize + 1,
-            engine.relativeGridSize + 1
+            useX * engine.scale,
+            useY * engine.scale,
+            (engine.relativeGridSize + 1) * engine.scale,
+            (engine.relativeGridSize + 1) * engine.scale
         );
     }
 
@@ -2312,8 +2312,8 @@ function performSquareRender(engine, context, item, useX, useY) {
 }
 
 function performBarRender(engine, context, item, useX, useY) {
-    const barWidth = item.barWidth;
-    let meterWidth = item.meterWidth;
+    const barWidth = item.barWidth * engine.scale;
+    let meterWidth = item.meterWidth * engine.scale;
     
     if(meterWidth < 0) {
         meterWidth = 0;
@@ -2322,10 +2322,10 @@ function performBarRender(engine, context, item, useX, useY) {
     context.globalAlpha = 1;
     
     context.fillStyle = "#000000";
-    context.fillRect(useX,useY,barWidth,6);
+    context.fillRect(useX * engine.scale, useY * engine.scale, barWidth, 6 * engine.scale);
     
     context.fillStyle = item.barColor;
-    context.fillRect(useX + 1, useY + 1, meterWidth, 4);
+    context.fillRect((useX + 1) * engine.scale, (useY + 1) * engine.scale, meterWidth, 4 * engine.scale);
 }
 
 function performSegmentedRender(engine, context, item, useX, useY) {
@@ -2343,10 +2343,10 @@ function performSegmentedRender(engine, context, item, useX, useY) {
         0,
         item.sW,
         item.sH,
-        useX + item.destSegX,
-        useY,
-        engine.halfRelativeGridSize + SEGMENTED_RENDER_BUFFER,
-        item.h
+        (useX + item.destSegX) * engine.scale,
+        useY * engine.scale,
+        (engine.halfRelativeGridSize + SEGMENTED_RENDER_BUFFER) * engine.scale,
+        item.h * engine.scale
     );
 }
 
@@ -2366,7 +2366,7 @@ function performStandardRender(engine, context, item, useX, useY, fullContext) {
     }
 
     if(item.img) {
-        context.drawImage(item.img, useX, useY, item.w, item.h);
+        context.drawImage(item.img, useX * engine.scale, useY * engine.scale, item.w * engine.scale, item.h * engine.scale);
     }
 
     if(item.angle != 0) {
@@ -2390,15 +2390,15 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
         if(radius > (engine.relativeGridSize * 0.8)) {
             context.save();
 
-            context.transform(1,0,0,0.5,0,0);
+            context.transform(1, 0, 0, 0.5, 0, 0);
 
             radialGradient = context.createRadialGradient(
-                x, 
-                y * 2, 
+                x * engine.scale, 
+                (y * 2) * engine.scale, 
                 0, 
-                x, 
-                y * 2, 
-                radius
+                x * engine.scale, 
+                (y * 2) * engine.scale, 
+                radius * engine.scale
             );
 
             radialGradient.addColorStop(0.0, from);
@@ -2407,7 +2407,7 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
             context.fillStyle = radialGradient;
             context.beginPath();
             
-            context.arc(x, y * 2, radius, 0, TWO_π);
+            context.arc(x * engine.scale, (y * 2) * engine.scale, radius * engine.scale, 0, TWO_π);
 
             context.fill();
             context.restore();
@@ -2415,21 +2415,21 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
         } else {
 
             radialGradient = context.createRadialGradient(
-                x, 
-                y, 
+                x * engine.scale, 
+                y * engine.scale, 
                 0, 
-                x, 
-                y, 
-                radius
+                x * engine.scale, 
+                y * engine.scale, 
+                radius * engine.scale
             );
 
             radialGradient.addColorStop(0.0, from);
-            radialGradient.addColorStop(1,off);
+            radialGradient.addColorStop(1, off);
     
             context.fillStyle = radialGradient;
             context.beginPath();
 
-            context.arc(x, y, radius, 0, TWO_π);
+            context.arc(x * engine.scale, y * engine.scale, radius * engine.scale, 0, TWO_π);
             context.fill();
         }
         
