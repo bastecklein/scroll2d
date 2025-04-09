@@ -518,36 +518,34 @@ export class Scroll2dEngine {
     doZoom(zoomIn, amt) {
         let lvl = this.zoomLevel;
 
-        if(amt) {
-            if(amt > 0.15) {
+        if (amt) {
+            if (amt > 0.15) {
                 amt = 0.15;
             }
-
-            if(amt < -0.15) {
+            if (amt < -0.15) {
                 amt = -0.15;
             }
-
-            if(zoomIn) {
-                if(lvl < this.maxZoom) {
+            if (zoomIn) {
+                if (lvl < this.maxZoom) {
                     lvl -= (lvl * amt);
                 }
             } else {
-                if(lvl > this.minZoom) {
+                if (lvl > this.minZoom) {
                     lvl -= (lvl * amt);
                 }
             }
         } else {
-            if(zoomIn) {
-                if(lvl < this.maxZoom) {
+            if (zoomIn) {
+                if (lvl < this.maxZoom) {
                     lvl += 0.15;
-                } else {
-                    if(lvl > this.minZoom) {
-                        lvl -= 0.15;
-                    }
+                }
+            } else {
+                if (lvl > this.minZoom) {
+                    lvl -= 0.15;
                 }
             }
         }
-
+        
         this.setZoomLevel(lvl);
     }
 
