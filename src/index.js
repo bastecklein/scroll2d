@@ -1203,6 +1203,18 @@ function resizeInstance(engine) {
         engine.gridSize = engine.winHeight / engine.mapHeight;
     }
 
+    engine.context.setTransform(1, 0, 0, 1, 0, 0);
+    engine.context.scale(engine.scale, engine.scale);
+
+    engine.staticContext.setTransform(1, 0, 0, 1, 0, 0);
+    engine.staticContext.scale(engine.scale, engine.scale);
+
+    engine.lightContext.setTransform(1, 0, 0, 1, 0, 0);
+    engine.lightContext.scale(engine.scale, engine.scale);
+
+    engine.lightFinalRenderContext.setTransform(1, 0, 0, 1, 0, 0);
+    engine.lightFinalRenderContext.scale(engine.scale, engine.scale);
+
     engine.setRelativeGridSize();
 
     engine.mapTotalWidth = engine.mapWidth * engine.relativeGridSize;
@@ -2191,7 +2203,7 @@ function addToFullMap(engine, fullContext, img, x, y) {
 
 function performTextRender(engine, context, item, useX, useY) {
 
-    const fontSize = (item.lineWidth * engine.zoomLevel) * engine.scale;
+    const fontSize = (item.lineWidth * engine.zoomLevel);
 
     context.setLineDash([]);
     context.textBaseline = "middle";
@@ -2202,7 +2214,7 @@ function performTextRender(engine, context, item, useX, useY) {
         fnt = "bold " + fontSize + "px " + item.textFont;
     }
 
-    drawStroked(context, fnt, item.color, item.barColor, item.isText, useX * engine.scale, useY * engine.scale, 2 * engine.scale, engine.zoomLevel);
+    drawStroked(context, fnt, item.color, item.barColor, item.isText, useX, useY, 2, engine.zoomLevel);
 }
 
 function drawStroked(ctx, font, fill, stroke, text, x, y, width, zoomLevel) {
@@ -2240,7 +2252,7 @@ function performLineRender(engine, context, item, useX, useY) {
     const useX2 = (0.5 + (item.w - engine.viewX)) | 0;
     const useY2 = (0.5 + (item.h - engine.viewY)) | 0;
 
-    context.lineWidth = item.lineWidth * engine.scale;
+    context.lineWidth = item.lineWidth;
     context.strokeStyle = item.color;
     context.globalAlpha = item.alpha;
 
@@ -2252,15 +2264,15 @@ function performLineRender(engine, context, item, useX, useY) {
 
     context.beginPath();
 
-    context.moveTo(useX * engine.scale, useY * engine.scale);
-    context.lineTo(useX2 * engine.scale, useY2 * engine.scale);
+    context.moveTo(useX, useY);
+    context.lineTo(useX2, useY2);
 
     context.stroke();
 }
 
 function performCircleRender(engine, context, item, useX, useY) {
     if(item.lineWidth > 0) {
-        context.lineWidth = item.lineWidth * engine.scale;
+        context.lineWidth = item.lineWidth;
         context.strokeStyle = item.color;
 
         if(item.dashedLine) {
@@ -2278,16 +2290,16 @@ function performCircleRender(engine, context, item, useX, useY) {
     
     if(engine.isometricMode) {
         context.ellipse(
-            useX * engine.scale, 
-            useY * engine.scale, 
-            item.h * engine.scale, 
-            (item.h / 2) * engine.scale, 
+            useX,
+            useY,
+            item.h,
+            (item.h / 2),
             0, 
             0, 
             TWO_π
         );
     } else {
-        context.ellipse(useX * engine.scale, useY * engine.scale, item.h * engine.scale, item.h * engine.scale, 0, 0, TWO_π);
+        context.ellipse(useX, useY, item.h, item.h, 0, 0, TWO_π);
     }
     
     if(item.lineWidth > 0) {
@@ -2317,10 +2329,10 @@ function performSquareRender(engine, context, item, useX, useY) {
         context.fill();
     } else {
         context.fillRect(
-            useX * engine.scale,
-            useY * engine.scale,
-            (engine.relativeGridSize + 1) * engine.scale,
-            (engine.relativeGridSize + 1) * engine.scale
+            useX,
+            useY,
+            (engine.relativeGridSize + 1),
+            (engine.relativeGridSize + 1)
         );
     }
 
@@ -2330,8 +2342,8 @@ function performSquareRender(engine, context, item, useX, useY) {
 }
 
 function performBarRender(engine, context, item, useX, useY) {
-    const barWidth = item.barWidth * engine.scale;
-    let meterWidth = item.meterWidth * engine.scale;
+    const barWidth = item.barWidth;
+    let meterWidth = item.meterWidth;
     
     if(meterWidth < 0) {
         meterWidth = 0;
@@ -2340,10 +2352,10 @@ function performBarRender(engine, context, item, useX, useY) {
     context.globalAlpha = 1;
     
     context.fillStyle = "#000000";
-    context.fillRect(useX * engine.scale, useY * engine.scale, barWidth, 6 * engine.scale);
+    context.fillRect(useX, useY, barWidth, 6);
     
     context.fillStyle = item.barColor;
-    context.fillRect((useX + 1) * engine.scale, (useY + 1) * engine.scale, meterWidth, 4 * engine.scale);
+    context.fillRect((useX + 1), (useY + 1), meterWidth, 4);
 }
 
 function performSegmentedRender(engine, context, item, useX, useY) {
@@ -2361,10 +2373,10 @@ function performSegmentedRender(engine, context, item, useX, useY) {
         0,
         item.sW,
         item.sH,
-        (useX + item.destSegX) * engine.scale,
-        useY * engine.scale,
-        (engine.halfRelativeGridSize + SEGMENTED_RENDER_BUFFER) * engine.scale,
-        item.h * engine.scale
+        (useX + item.destSegX),
+        useY,
+        (engine.halfRelativeGridSize + SEGMENTED_RENDER_BUFFER),
+        item.h
     );
 }
 
@@ -2384,7 +2396,7 @@ function performStandardRender(engine, context, item, useX, useY, fullContext) {
     }
 
     if(item.img) {
-        context.drawImage(item.img, useX * engine.scale, useY * engine.scale, item.w * engine.scale, item.h * engine.scale);
+        context.drawImage(item.img, useX, useY, item.w, item.h);
     }
 
     if(item.angle != 0) {
@@ -2411,12 +2423,12 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
             context.transform(1, 0, 0, 0.5, 0, 0);
 
             radialGradient = context.createRadialGradient(
-                x * engine.scale, 
-                (y * 2) * engine.scale, 
+                x, 
+                (y * 2), 
                 0, 
-                x * engine.scale, 
-                (y * 2) * engine.scale, 
-                radius * engine.scale
+                x, 
+                (y * 2), 
+                radius
             );
 
             radialGradient.addColorStop(0.0, from);
@@ -2425,7 +2437,7 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
             context.fillStyle = radialGradient;
             context.beginPath();
             
-            context.arc(x * engine.scale, (y * 2) * engine.scale, radius * engine.scale, 0, TWO_π);
+            context.arc(x, (y * 2), radius, 0, TWO_π);
 
             context.fill();
             context.restore();
@@ -2433,12 +2445,12 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
         } else {
 
             radialGradient = context.createRadialGradient(
-                x * engine.scale, 
-                y * engine.scale, 
+                x, 
+                y,
                 0, 
-                x * engine.scale, 
-                y * engine.scale, 
-                radius * engine.scale
+                x,
+                y,
+                radius
             );
 
             radialGradient.addColorStop(0.0, from);
@@ -2447,7 +2459,7 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
             context.fillStyle = radialGradient;
             context.beginPath();
 
-            context.arc(x * engine.scale, y * engine.scale, radius * engine.scale, 0, TWO_π);
+            context.arc(x, y, radius, 0, TWO_π);
             context.fill();
         }
         
