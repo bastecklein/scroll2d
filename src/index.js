@@ -2994,8 +2994,8 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
     item.alpha = alpha;
 
     let dX, dY;
-    let dW = img.width * scale;
-    let dH = img.height * scale;
+    let dW = img.width;
+    let dH = img.height;
 
     if(engine.zoomLevel != 1) {
         dW *= engine.zoomLevel;
@@ -3084,8 +3084,8 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
         dY -= Math.round((elevation & engine.gridSize) * engine.zoomLevel);
     }
 
-    item.x = dX / engine.scale;
-    item.y = dY / engine.scale;
+    item.x = dX;
+    item.y = dY;
     item.w = dW;
     item.h = dH;
 
