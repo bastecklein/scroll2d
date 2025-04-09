@@ -3084,8 +3084,8 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
         dY -= Math.round((elevation & engine.gridSize) * engine.zoomLevel);
     }
 
-    item.x = dX;
-    item.y = dY;
+    item.x = dX / engine.scale;
+    item.y = dY / engine.scale;
     item.w = dW;
     item.h = dH;
 
