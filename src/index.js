@@ -1339,7 +1339,10 @@ function renderScrollInstance(engine, delta) {
     engine.context.globalCompositeOperation = "source-over";
 
     if(engine.staticCanvas && engine.staticCanvas.width > 0) {
-        engine.context.drawImage(engine.staticCanvas, 0, 0);
+        engine.context.save();
+        engine.context.setTransform(1, 0, 0, 1, 0, 0); 
+        engine.context.drawImage(engine.staticCanvas, 0, 0, engine.winWidth, engine.winHeight);
+        engine.context.restore();
     }
 
     if(engine.drawQueue.length > 0) {
@@ -3026,25 +3029,8 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
         const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
         const totalRight = rightIsoX + engine.halfRelativeGridSize;
 
-        // Use bottom center alignment for multi-tile sprites:
-        dX = totalRight - Math.round(dW / 2);
-        dY = totalBottom - dH;
-
-        /*
-        const lastTileX = x + tileWidth - 1;
-        const lastTileY = y + tileHeight - 1;
-
-        nearness = lastTileX + lastTileY;
-
-        const bottomIsoY = (lastTileX + (lastTileY - yOffset)) * engine.quarterRelativeGridSize;
-        const rightIsoX = (lastTileX - (lastTileY - yOffset)) * engine.halfRelativeGridSize;
-
-        const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
-        const totalRight = rightIsoX + engine.halfRelativeGridSize;
-
         dX = totalRight - dW;
         dY = totalBottom - dH;
-        */
     } else {
         dX = x * engine.relativeGridSize;
         dY = (((y - yOffset) * engine.relativeGridSize) + engine.relativeGridSize) - dH;
