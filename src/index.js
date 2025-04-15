@@ -3133,14 +3133,16 @@ function drawBigStationary(engine, img, x, y, tX, tY, step, meterPercent, meterC
     const lastTileX = x + tileWidth - 1;
     const lastTileY = y + tileHeight - 1;
 
-    const bottomIsoY = (lastTileX + lastTileY) * engine.quarterRelativeGridSize;
-    const rightIsoX = (lastTileX - y) * engine.halfRelativeGridSize;
+    const bottomIsoY = (lastTileX + (lastTileY - yOffset)) * engine.quarterRelativeGridSize;
+    const rightIsoX = (lastTileX - (lastTileY - yOffset)) * engine.halfRelativeGridSize;
 
     const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
     const totalRight = rightIsoX + engine.halfRelativeGridSize;
 
     dX = totalRight - dW;
     dY = totalBottom - dH;
+
+    dX += 50;
 
     const segmentSize = engine.halfGridSize / scale;
 
