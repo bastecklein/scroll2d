@@ -1341,7 +1341,7 @@ function renderScrollInstance(engine, delta) {
     if(engine.staticCanvas && engine.staticCanvas.width > 0) {
         engine.context.save();
         engine.context.setTransform(1, 0, 0, 1, 0, 0); 
-        engine.context.drawImage(engine.staticCanvas, 0, 0, engine.winWidth, engine.winHeight);
+        engine.context.drawImage(engine.staticCanvas, 0, 0, engine.width, engine.height);
         engine.context.restore();
     }
 
