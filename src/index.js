@@ -3142,8 +3142,8 @@ function drawBigStationary(engine, img, x, y, tX, tY, step, meterPercent, meterC
     dX = totalRight - dW;
     dY = totalBottom - dH;
 
-    dX += 50;
 
+    console.log("bs");
     const segmentSize = engine.halfGridSize / scale;
 
     const drawSegments = Math.round(img.width / segmentSize);
