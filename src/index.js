@@ -2082,9 +2082,17 @@ function performRenderOnItem(engine, item, context, fullContext) {
     let useX, useY;
 
     if(engine.isometricMode) {
+        const offsetX = (item.tileWidth - 1) * engine.halfRelativeGridSize;
+        const offsetY = (item.tileHeight - 1) * engine.quarterRelativeGridSize;
 
+        useX = item.x - engine.viewX - offsetX;
+        useY = item.y - engine.viewY - offsetY;
+
+
+        /*
         useX = item.x - engine.viewX - ((item.tileWidth - 1) * engine.halfRelativeGridSize);
         useY = item.y - engine.viewY - ((item.tileHeight - 1) * engine.quarterRelativeGridSize);
+        */
 
         /*
         useX = item.x - engine.viewX;
@@ -3148,8 +3156,6 @@ function drawBigStationary(engine, img, x, y, tX, tY, step, meterPercent, meterC
     dX = totalRight - dW;
     dY = totalBottom - dH;
 
-
-    console.log("bs");
     const segmentSize = engine.halfGridSize / scale;
 
     const drawSegments = Math.round(img.width / segmentSize);
