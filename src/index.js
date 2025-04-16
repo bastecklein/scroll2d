@@ -2082,11 +2082,12 @@ function performRenderOnItem(engine, item, context, fullContext) {
     let useX, useY;
 
     if(engine.isometricMode) {
+        /*
         const offsetX = (item.tileWidth - 1) * engine.halfRelativeGridSize;
         const offsetY = (item.tileHeight - 1) * engine.quarterRelativeGridSize;
 
         useX = item.x - engine.viewX - offsetX;
-        useY = item.y - engine.viewY - offsetY;
+        useY = item.y - engine.viewY - offsetY;*/
 
 
         /*
@@ -2094,10 +2095,10 @@ function performRenderOnItem(engine, item, context, fullContext) {
         useY = item.y - engine.viewY - ((item.tileHeight - 1) * engine.quarterRelativeGridSize);
         */
 
-        /*
+        
         useX = item.x - engine.viewX;
         useY = item.y - engine.viewY;
-        */
+        
     } else {
         useX = (0.5 + (item.x - engine.viewX)) | 0;
         useY = (0.5 + (item.y - engine.viewY)) | 0;
@@ -3037,6 +3038,13 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
 
         nearness = lastTileX + lastTileY;
 
+        const bottomIsoY = (lastTileX + lastTileY) * engine.quarterRelativeGridSize;
+        const rightIsoX  = (lastTileX - lastTileY) * engine.halfRelativeGridSize;
+
+        dX = rightIsoX + engine.halfRelativeGridSize - dW;
+        dY = bottomIsoY + engine.halfRelativeGridSize - dH - yOffset;
+
+        /*
         const bottomIsoY = (lastTileX + (lastTileY - yOffset)) * engine.quarterRelativeGridSize;
         const rightIsoX = (lastTileX - (lastTileY - yOffset)) * engine.halfRelativeGridSize;
 
@@ -3045,6 +3053,7 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
 
         dX = totalRight - dW;
         dY = totalBottom - dH;
+        */
     } else {
         dX = x * engine.relativeGridSize;
         dY = (((y - yOffset) * engine.relativeGridSize) + engine.relativeGridSize) - dH;
