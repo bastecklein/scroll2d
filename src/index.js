@@ -2082,8 +2082,14 @@ function performRenderOnItem(engine, item, context, fullContext) {
     let useX, useY;
 
     if(engine.isometricMode) {
+
+        useX = item.x - engine.viewX - ((item.tileWidth - 1) * engine.halfRelativeGridSize);
+        useY = item.y - engine.viewY - ((item.tileHeight - 1) * engine.quarterRelativeGridSize);
+
+        /*
         useX = item.x - engine.viewX;
         useY = item.y - engine.viewY;
+        */
     } else {
         useX = (0.5 + (item.x - engine.viewX)) | 0;
         useY = (0.5 + (item.y - engine.viewY)) | 0;
