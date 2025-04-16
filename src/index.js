@@ -3034,20 +3034,11 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
 
     if(engine.isometricMode) {
 
-        const isoX = (x - (y - yOffset)) * engine.halfRelativeGridSize;
-        const isoY = (x + (y - yOffset)) * engine.quarterRelativeGridSize;
-
-
         const lastTileX = x + tileWidth - 1;
         const lastTileY = y + tileHeight - 1;
-
-        nearness = lastTileX + lastTileY;
 
         const rightIsoX = (lastTileX - (y - yOffset)) * engine.halfRelativeGridSize;
-
-        const bottomIsoY = (
-            lastTileX + (lastTileY - yOffset)
-        ) *  engine.quarterRelativeGridSize;
+        const bottomIsoY = (lastTileX + (lastTileY - yOffset)) *  engine.quarterRelativeGridSize;
 
         const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
         const totalRight = rightIsoX + engine.halfRelativeGridSize;
@@ -3055,20 +3046,7 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
         dX = totalRight - dW;
         dY = totalBottom - dH;
 
-        /*
-        const lastTileX = x + tileWidth - 1;
-        const lastTileY = y + tileHeight - 1;
-
-        const bottomIsoY = (lastTileX + (lastTileY - yOffset)) * engine.quarterRelativeGridSize;
-        const rightIsoX = (lastTileX - (lastTileY - yOffset)) * engine.halfRelativeGridSize;
-
-        const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
-        const totalRight = rightIsoX + engine.halfRelativeGridSize;
-
-        dX = totalRight - dW;
-        dY = totalBottom - dH;
-        */
-        
+        nearness = lastTileX + lastTileY;
     } else {
         dX = x * engine.relativeGridSize;
         dY = (((y - yOffset) * engine.relativeGridSize) + engine.relativeGridSize) - dH;
@@ -3171,8 +3149,8 @@ function drawBigStationary(engine, img, x, y, tX, tY, step, meterPercent, meterC
     const lastTileX = x + tileWidth - 1;
     const lastTileY = y + tileHeight - 1;
 
-    const bottomIsoY = (lastTileX + (lastTileY - yOffset)) * engine.quarterRelativeGridSize;
-    const rightIsoX = (lastTileX - (lastTileY - yOffset)) * engine.halfRelativeGridSize;
+    const rightIsoX = (lastTileX - (y - yOffset)) * engine.halfRelativeGridSize;
+    const bottomIsoY = (lastTileX + (lastTileY - yOffset)) *  engine.quarterRelativeGridSize;
 
     const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
     const totalRight = rightIsoX + engine.halfRelativeGridSize;
