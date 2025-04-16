@@ -3022,8 +3022,8 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
     item.alpha = alpha;
 
     let dX, dY;
-    let dW = img.width;
-    let dH = img.height;
+    let dW = img.width * scale;
+    let dH = img.height * scale;
 
     if(engine.zoomLevel != 1) {
         dW *= engine.zoomLevel;
@@ -3033,13 +3033,32 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
     let nearness = y;
 
     if(engine.isometricMode) {
-        const screenX = (x - y) * engine.halfRelativeGridSize;
-        const screenY = (x + y) * engine.quarterRelativeGridSize;
-    
-        dX = screenX;
-        dY = screenY - dH + engine.relativeGridSize - yOffset;
+
+        const isoX = (x - (y - yOffset)) * engine.halfRelativeGridSize;
+        const isoY = (x + (y - yOffset)) * engine.quarterRelativeGridSize;
+
+
+        const lastTileX = x + tileWidth - 1;
+        const lastTileY = y + tileHeight - 1;
+
+        nearness = lastTileX + lastTileY;
+
+        const rightIsoX = (lastTileX - (y - yOffset)) * engine.halfRelativeGridSize;
+
+        const bottomIsoY = (
+            lastTileX + (lastTileY - yOffset)
+        ) *  engine.quarterRelativeGridSize;
+
+        const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
+        const totalRight = rightIsoX + engine.halfRelativeGridSize;
+
+        dX = totalRight - dW;
+        dY = totalBottom - dH;
 
         /*
+        const lastTileX = x + tileWidth - 1;
+        const lastTileY = y + tileHeight - 1;
+
         const bottomIsoY = (lastTileX + (lastTileY - yOffset)) * engine.quarterRelativeGridSize;
         const rightIsoX = (lastTileX - (lastTileY - yOffset)) * engine.halfRelativeGridSize;
 
@@ -3049,6 +3068,7 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
         dX = totalRight - dW;
         dY = totalBottom - dH;
         */
+        
     } else {
         dX = x * engine.relativeGridSize;
         dY = (((y - yOffset) * engine.relativeGridSize) + engine.relativeGridSize) - dH;
