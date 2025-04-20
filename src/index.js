@@ -14,15 +14,33 @@ const MIN_LERP = 0.001;
 const SEGMENTED_RENDER_BUFFER = 1;
 const TARGET_DELTA = 1000 / 60;
 
-let engineInstances = {};
+/**
+ * @type {Object.<string, Scroll2dEngine>}
+ */
+const engineInstances = {};
 
-let usedRenderObjects = [];
-let usedPopperObjects = [];
-let lightInstructionRecycling = [];
+/**
+ * @type {Array<RenderItem>}
+ */
+const usedRenderObjects = [];
+
+/**
+ * @type {Array<TextPopItem>}
+ */
+const usedPopperObjects = [];
+
+/** 
+ * @type {Array<LightInstruction}
+ */
+const lightInstructionRecycling = [];
 
 let lastRAF = null;
 let currentFPS = 0;
 
+/**
+ * Initializes a new Scroll2dEngine instance.
+ * @returns {Scroll2dEngine} The new Scroll2dEngine instance.
+ */
 export function getInstance(options) {
     const engine = new Scroll2dEngine(options);
     engineInstances[engine.id] = engine;
@@ -398,6 +416,10 @@ export class Scroll2dEngine {
         }
     }
 
+    /**
+     * Returns the current view bounds.
+     * @returns {ViewBounds} The current view bounds.
+     */
     getViewBounds() {
         if(this.viewBounds == null) {
             this.setViewBounds();
@@ -1133,6 +1155,11 @@ class RenderItem {
     }
 }
 
+/**
+ * Represents a chevron that can be appended to a drawSprite call.
+ * @property {string} color - The color of the chevron.
+ * @property {string} image - The image of the chevron.
+ */
 export class Chevron {
     constructor(color = null, image = null) {
         this.color = color;
@@ -1168,6 +1195,12 @@ export function globalResize() {
     }
 }
 
+/**
+ * Converts a hex color string to an RGB object.
+ * @param {string} hex - The hex color string (e.g., "#ff0000").
+ * @returns {object} An object with r, g, and b properties representing the RGB values.
+ * @deprecated Use `hexToRGB` from common-helpers instead: https://github.com/bastecklein/common-helpers
+ */
 export function hexToRgb(hex) {
     return hexToRGB(hex);
 }
@@ -1541,10 +1574,7 @@ function renderScrollInstance(engine, delta) {
 
             engine.centerOnCoord(nx, ny);
         }
-
-        
-
-        
+  
     }
 }
 
@@ -4012,6 +4042,15 @@ function doDrawLight(engine, x, y, radius, color, tX, tY, step, intensity) {
     engine.lightSources.push(getFreshLightInstruction(ux, uy, useRadius, rgbColor, intensity));
 }
 
+/**
+ * Returns a new LightInstruction object or reuses an existing one from the recycling pool.
+ * @param {number} x - The x coordinate of the light source.
+ * @param {number} y - The y coordinate of the light source.
+ * @param {number} r - The radius of the light source.
+ * @param {string} c - The color of the light source in hex format.
+ * @param {number} i - The intensity of the light source.
+ * @returns {LightInstruction} - A new or recycled LightInstruction object.
+ */
 function getFreshLightInstruction(x,y,r,c,i) {
     if(lightInstructionRecycling.length > 0) {
         const fresh = lightInstructionRecycling.pop();
