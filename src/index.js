@@ -1243,8 +1243,9 @@ function resizeInstance(engine) {
     engine.lightContext.setTransform(1, 0, 0, 1, 0, 0);
     engine.lightContext.scale(engine.scale, engine.scale);
 
+    /*
     engine.lightFinalRenderContext.setTransform(1, 0, 0, 1, 0, 0);
-    engine.lightFinalRenderContext.scale(engine.scale, engine.scale);
+    engine.lightFinalRenderContext.scale(engine.scale, engine.scale);*/
 
     engine.setRelativeGridSize();
 
@@ -1460,11 +1461,6 @@ function renderScrollInstance(engine, delta) {
         }
 
         engine.context.save();
-        engine.context.setTransform(1, 0, 0, 1, 0, 0);
-
-        const useScale = 1 / engine.scale;
-
-        engine.context.scale(useScale, useScale);
         engine.context.globalCompositeOperation = "multiply";
         engine.context.drawImage(engine.lightFinalRenderCanvas, 0, 0);
         engine.context.restore();
