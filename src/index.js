@@ -1451,6 +1451,8 @@ function renderScrollInstance(engine, delta) {
             lightInstructionRecycling.push(source);
         }
 
+        /*
+
         if(engine.canvas && engine.width > 0 && engine.height > 0) {
             engine.lightFinalRenderContext.globalCompositeOperation = "source-over";
             engine.lightFinalRenderContext.drawImage(engine.canvas, 0, 0);
@@ -1459,11 +1461,12 @@ function renderScrollInstance(engine, delta) {
         if(engine.lightCanvas && engine.width > 0 && engine.height > 0) {
             engine.lightFinalRenderContext.globalCompositeOperation = "source-in";
             engine.lightFinalRenderContext.drawImage(engine.lightCanvas, 0, 0);
-        }
+        }*/
 
         engine.context.save();
         engine.context.globalCompositeOperation = "multiply";
-        engine.context.drawImage(engine.lightFinalRenderCanvas, 0, 0);
+        //engine.context.drawImage(engine.lightFinalRenderCanvas, 0, 0);
+        engine.context.drawImage(engine.lightCanvas, 0, 0);
         engine.context.restore();
     }
     
