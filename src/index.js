@@ -1240,8 +1240,9 @@ function resizeInstance(engine) {
     engine.staticContext.setTransform(1, 0, 0, 1, 0, 0);
     engine.staticContext.scale(engine.scale, engine.scale);
 
+    /*
     engine.lightContext.setTransform(1, 0, 0, 1, 0, 0);
-    engine.lightContext.scale(engine.scale, engine.scale);
+    engine.lightContext.scale(engine.scale, engine.scale);*/
 
     /*
     engine.lightFinalRenderContext.setTransform(1, 0, 0, 1, 0, 0);
