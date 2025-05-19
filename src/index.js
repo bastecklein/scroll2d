@@ -1461,7 +1461,10 @@ function renderScrollInstance(engine, delta) {
 
         engine.context.save();
         engine.context.setTransform(1, 0, 0, 1, 0, 0);
-        engine.context.scale(1, 1);
+
+        const useScale = 1 / engine.scale;
+
+        engine.context.scale(useScale, useScale);
         engine.context.globalCompositeOperation = "multiply";
         engine.context.drawImage(engine.lightFinalRenderCanvas, 0, 0);
         engine.context.restore();
