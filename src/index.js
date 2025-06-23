@@ -683,8 +683,8 @@ export class Scroll2dEngine {
         doDrawStaticTile(this, img, x, y, zIndex);
     }
 
-    drawTile(img, x, y, zIndex, blocksLight, alpha) {
-        return doDrawTile(this, img, x, y, zIndex, blocksLight, alpha);
+    drawTile(img, x, y, zIndex, blocksLight, alpha, angle) {
+        return doDrawTile(this, img, x, y, zIndex, blocksLight, alpha, angle);
     }
 
     drawSprite(img, x, y, tX = x, tY = y, step = 0, meterPercent = null, meterColor = "#ff0000", alpha = 1, zIndex = 0, tileWidth = 1, tileHeight = 1, chevrons = null, angle = 0, centerChevrons = false, textLabel = null, yOffset = 0, scale = 1, textSize = 20, textFont = null, textYOffset = 0, meterYOffset = 0, elevation = 0) {
@@ -2852,7 +2852,7 @@ function doDrawStaticTile(engine, img, x, y, zIndex) {
     }
 
     if(engine.fullMapRenderCallback) {
-        doDrawTile(engine, img, x, y, zIndex, false, 1);
+        doDrawTile(engine, img, x, y, zIndex, false, 1, 0);
         return;
     }
 
@@ -2883,7 +2883,7 @@ function doDrawStaticTile(engine, img, x, y, zIndex) {
     }
 }
 
-function doDrawTile(engine, img, x, y, zIndex = 0, blocksLight = false, alpha = 1) {
+function doDrawTile(engine, img, x, y, zIndex = 0, blocksLight = false, alpha = 1, angle = 0) {
     if(!engine.drawQueue || img == undefined || img == null) {
         return;
     }
@@ -2903,6 +2903,7 @@ function doDrawTile(engine, img, x, y, zIndex = 0, blocksLight = false, alpha = 
     item.alpha = alpha;
     item.blocksLight = blocksLight;
     item.zIndex = zIndex;
+    item.angle = angle;
 
     if(engine.isometricMode) {
         item.nearness += x;
@@ -3020,7 +3021,7 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
     }
 
     if(engine.fullMapRenderCallback) {
-        doDrawTile(engine, img, x, y, zIndex, false, alpha);
+        doDrawTile(engine, img, x, y, zIndex, false, alpha, angle);
         return;
     }
 
