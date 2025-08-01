@@ -597,6 +597,9 @@ export class Scroll2dEngine {
 
         this.centerOnCoord(position.x, position.y);
 
+        // Auto-optimize performance based on new zoom level
+        this.optimizeForZoomLevel();
+
         this.notifyViewportChange(true);
     }
 
@@ -730,7 +733,13 @@ export class Scroll2dEngine {
             dy = y * this.relativeGridSize;
         }
 
-        const rgPad = this.relativeGridSize + this.viewPadding;
+        // Adaptive padding based on zoom level - less padding when zoomed out for better culling
+        let adaptivePadding = this.viewPadding;
+        if(this.zoomLevel < 0.5) {
+            adaptivePadding = Math.max(0, this.viewPadding - this.relativeGridSize);
+        }
+
+        const rgPad = this.relativeGridSize + adaptivePadding;
 
         if(dx > this.viewX - rgPad && dx < this.winWidth + this.viewX + rgPad && dy > this.viewY - rgPad && dy < this.winHeight + this.viewY + rgPad) {
             return true;
@@ -970,6 +979,26 @@ export class Scroll2dEngine {
 
     setFastRenderMode(val) {
         this.useFastRenderMode = val;
+    }
+
+    /**
+     * Automatically adjusts performance settings based on current zoom level
+     * Call this after zoom changes to optimize performance
+     */
+    optimizeForZoomLevel() {
+        if(this.zoomLevel < 0.3) {
+            // Very zoomed out - prioritize performance
+            this.setFPSLimiter(3); // 20fps max
+            this.setFastRenderMode(true);
+        } else if(this.zoomLevel < 0.6) {
+            // Moderately zoomed out
+            this.setFPSLimiter(2); // 30fps max
+            this.setFastRenderMode(true);
+        } else {
+            // Normal or zoomed in - prioritize quality
+            this.setFPSLimiter(1); // 60fps
+            this.setFastRenderMode(false);
+        }
     }
 
     getZoomLevel() {
@@ -1312,10 +1341,8 @@ function renderScrollInstance(engine, delta) {
 
     for(const popper of engine.textPoppers) {
         if(!popper.cashed) {
-            console.log(`Updating popper: "${popper.text}", before - y:${popper.y}, alpha:${popper.alpha}, delta:${delta}`);
             popper.y -= 2 * delta;
             popper.alpha -= 0.01 * delta; // Slower alpha decay so text stays visible longer
-            console.log(`Updating popper: "${popper.text}", after - y:${popper.y}, alpha:${popper.alpha}`);
         }
     }
 
@@ -1343,7 +1370,17 @@ function renderScrollInstance(engine, delta) {
 
     engine.fpsCounter++;
 
-    if(engine.fpsCounter < engine.fpsLimiter) {
+    // Adaptive FPS limiting based on render load
+    let dynamicFpsLimiter = engine.fpsLimiter;
+    const totalRenderItems = engine.drawQueue.length + engine.aboveFoldDrawQueue.length;
+    
+    if(totalRenderItems > 1000) {
+        dynamicFpsLimiter = Math.max(engine.fpsLimiter, 3); // Limit to 20fps when many items
+    } else if(totalRenderItems > 500) {
+        dynamicFpsLimiter = Math.max(engine.fpsLimiter, 2); // Limit to 30fps when moderate items
+    }
+
+    if(engine.fpsCounter < dynamicFpsLimiter) {
         return;
     }
 
@@ -1388,7 +1425,10 @@ function renderScrollInstance(engine, delta) {
     }
 
     if(engine.drawQueue.length > 0) {
-        engine.drawQueue.sort(sortRenderItemReverse);
+        // Skip expensive sorting in fast render mode with many items
+        if(!engine.useFastRenderMode || engine.drawQueue.length < 200) {
+            engine.drawQueue.sort(sortRenderItemReverse);
+        }
 
         while(engine.drawQueue.length > 0) {
             const item = engine.drawQueue.pop();
@@ -1512,10 +1552,6 @@ function renderScrollInstance(engine, delta) {
         if(popper.cashed) {
             popperKillArray.push(popper);
         } else {
-            // Debug logging for text popper rendering
-            const useX = popper.x - engine.viewX;
-            const useY = popper.y - engine.viewY;
-            console.log(`Rendering text popper: "${popper.text}" at screen(${useX},${useY}), alpha:${popper.alpha}, popper.y:${popper.y}, engine.viewY:${engine.viewY}`);
             renderTextPopper(engine, engine.context, popper);
         }
     }
@@ -2080,48 +2116,24 @@ function doStaticRender(engine, fullContext) {
 }
 
 function sortRenderItemReverse(b,a) {
-    if(a.zIndex > b.zIndex) {
-        return 1;
-    }
+    // Primary sort by zIndex (most important)
+    const zDiff = a.zIndex - b.zIndex;
+    if(zDiff !== 0) return zDiff;
 
-    if(a.zIndex < b.zIndex) {
-        return -1;
-    }
+    // Secondary sort by nearness
+    const nDiff = a.nearness - b.nearness;
+    if(nDiff !== 0) return nDiff;
 
-    if(a.nearness > b.nearness) {
-        return 1;
-    }
+    // Tertiary sort by cX
+    const xDiff = a.cX - b.cX;
+    if(xDiff !== 0) return xDiff;
 
-    if(a.nearness < b.nearness) {
-        return -1;
-    }
+    // Quaternary sort by cY
+    const yDiff = a.cY - b.cY;
+    if(yDiff !== 0) return yDiff;
 
-    if(a.cX > b.cX) {
-        return 1;
-    }
-
-    if(a.cX < b.cX) {
-        return -1;
-    }
-    
-
-    if(a.cY > b.cY) {
-        return 1;
-    }
-
-    if(a.cY < b.cY) {
-        return -1;
-    }
-
-    if(a.ro > b.ro) {
-        return 1;
-    }
-
-    if(a.ro < b.ro) {
-        return -1;
-    }
-
-    return 0;
+    // Final sort by render order
+    return a.ro - b.ro;
 }
 
 function performRenderOnItem(engine, item, context, fullContext) {
@@ -2905,6 +2917,19 @@ function doDrawTile(engine, img, x, y, zIndex = 0, blocksLight = false, alpha = 
         return;
     }
 
+    // Level-of-Detail optimization: Skip very small tiles when zoomed out
+    if(engine.zoomLevel < 0.25 && !engine.fullMapRenderCallback) {
+        // At very low zoom levels, only render every 4th tile to reduce load
+        if((x % 4 !== 0) || (y % 4 !== 0)) {
+            return;
+        }
+    } else if(engine.zoomLevel < 0.5 && !engine.fullMapRenderCallback) {
+        // At low zoom levels, only render every 2nd tile
+        if((x % 2 !== 0) || (y % 2 !== 0)) {
+            return;
+        }
+    }
+
     const item = buildRenderObjectForTile(engine, img, x, y, null);
 
     item.tX = x;
@@ -3467,9 +3492,6 @@ function doPopText(engine, x, y, text, color) {
         popY = (y * engine.relativeGridSize) + engine.halfRelativeGridSize;
     }
 
-    // Debug logging to help diagnose positioning issues
-    console.log(`popText debug: coord(${x},${y}) -> screen(${popX},${popY}), viewX:${engine.viewX}, viewY:${engine.viewY}, text:"${text}"`);
-
     let freshPop = null;
 
     if(usedPopperObjects.length == 0) {
@@ -3485,7 +3507,6 @@ function doPopText(engine, x, y, text, color) {
     }
 
     engine.textPoppers.push(freshPop);
-    console.log(`popText: Added text popper, total count: ${engine.textPoppers.length}, initial alpha: ${freshPop.alpha}`);
 }
 
 function doDrawSquare(engine, color, x, y, zIndex, composite) {
