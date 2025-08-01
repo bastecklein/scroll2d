@@ -1278,7 +1278,7 @@ function globalRender(t) {
 
     for(const id in engineInstances) {
         const engine = engineInstances[id];
-        engine.render();
+        engine.render(delta);
         engine.update(t, delta);
     }
 }
@@ -1286,6 +1286,11 @@ function globalRender(t) {
 function renderScrollInstance(engine, delta) {
     if(!engine.running) {
         return;
+    }
+
+    // Ensure delta is always a valid number
+    if(isNaN(delta) || delta === undefined || delta === null) {
+        delta = 1;
     }
 
     if(engine.autoScale) {
@@ -1307,8 +1312,10 @@ function renderScrollInstance(engine, delta) {
 
     for(const popper of engine.textPoppers) {
         if(!popper.cashed) {
+            console.log(`Updating popper: "${popper.text}", before - y:${popper.y}, alpha:${popper.alpha}, delta:${delta}`);
             popper.y -= 2 * delta;
             popper.alpha -= 0.01 * delta; // Slower alpha decay so text stays visible longer
+            console.log(`Updating popper: "${popper.text}", after - y:${popper.y}, alpha:${popper.alpha}`);
         }
     }
 
@@ -1508,7 +1515,7 @@ function renderScrollInstance(engine, delta) {
             // Debug logging for text popper rendering
             const useX = popper.x - engine.viewX;
             const useY = popper.y - engine.viewY;
-            console.log(`Rendering text popper: "${popper.text}" at screen(${useX},${useY}), alpha:${popper.alpha}`);
+            console.log(`Rendering text popper: "${popper.text}" at screen(${useX},${useY}), alpha:${popper.alpha}, popper.y:${popper.y}, engine.viewY:${engine.viewY}`);
             renderTextPopper(engine, engine.context, popper);
         }
     }
@@ -3478,7 +3485,7 @@ function doPopText(engine, x, y, text, color) {
     }
 
     engine.textPoppers.push(freshPop);
-    console.log(`popText: Added text popper, total count: ${engine.textPoppers.length}`);
+    console.log(`popText: Added text popper, total count: ${engine.textPoppers.length}, initial alpha: ${freshPop.alpha}`);
 }
 
 function doDrawSquare(engine, color, x, y, zIndex, composite) {
