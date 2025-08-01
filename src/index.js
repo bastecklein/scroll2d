@@ -1308,7 +1308,7 @@ function renderScrollInstance(engine, delta) {
     for(const popper of engine.textPoppers) {
         if(!popper.cashed) {
             popper.y -= 2 * delta;
-            popper.alpha -= 0.03 * delta;
+            popper.alpha -= 0.01 * delta; // Slower alpha decay so text stays visible longer
         }
     }
 
@@ -1505,6 +1505,10 @@ function renderScrollInstance(engine, delta) {
         if(popper.cashed) {
             popperKillArray.push(popper);
         } else {
+            // Debug logging for text popper rendering
+            const useX = popper.x - engine.viewX;
+            const useY = popper.y - engine.viewY;
+            console.log(`Rendering text popper: "${popper.text}" at screen(${useX},${useY}), alpha:${popper.alpha}`);
             renderTextPopper(engine, engine.context, popper);
         }
     }
@@ -2206,7 +2210,7 @@ function performRenderOnItem(engine, item, context, fullContext) {
 }
 
 function renderTextPopper(engine, context, popper) {
-    if(popper.alpha <= 0) {
+    if(popper.alpha <= 0.05) { // Changed threshold from 0 to 0.05 to allow for slight visibility
         popper.cashed = true;
         return;
     }
@@ -2214,7 +2218,7 @@ function renderTextPopper(engine, context, popper) {
     const useX = popper.x - engine.viewX;
     const useY = popper.y - engine.viewY;
 
-    const fontSize = 20 * engine.zoomLevel;
+    const fontSize = Math.max(12, 20 * engine.zoomLevel); // Ensure minimum readable font size
 
     context.setLineDash([]);
     context.strokeStyle = "#000000";
@@ -3456,6 +3460,9 @@ function doPopText(engine, x, y, text, color) {
         popY = (y * engine.relativeGridSize) + engine.halfRelativeGridSize;
     }
 
+    // Debug logging to help diagnose positioning issues
+    console.log(`popText debug: coord(${x},${y}) -> screen(${popX},${popY}), viewX:${engine.viewX}, viewY:${engine.viewY}, text:"${text}"`);
+
     let freshPop = null;
 
     if(usedPopperObjects.length == 0) {
@@ -3471,6 +3478,7 @@ function doPopText(engine, x, y, text, color) {
     }
 
     engine.textPoppers.push(freshPop);
+    console.log(`popText: Added text popper, total count: ${engine.textPoppers.length}`);
 }
 
 function doDrawSquare(engine, color, x, y, zIndex, composite) {
