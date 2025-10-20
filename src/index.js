@@ -2172,8 +2172,15 @@ function performRenderOnItem(engine, item, context, fullContext) {
         }
     }
 
-    if(item.isLine && (useX > engine.winWidth || useY > engine.winHeight)) {
-        return;
+    if(item.isLine) {
+        // For lines, check if any part of the line segment is visible on screen
+        const useX2 = (0.5 + (item.w - engine.viewX)) | 0;
+        const useY2 = (0.5 + (item.h - engine.viewY)) | 0;
+        
+        // Check if the line segment intersects with the viewport rectangle
+        if(!isLineVisibleInViewport(useX, useY, useX2, useY2, 0, 0, engine.winWidth, engine.winHeight)) {
+            return;
+        }
     }
 
     if(item.blocksLight && !engine.isometricMode) {
@@ -2795,8 +2802,49 @@ function processRay(ray,radius,allSides,sourceBlocks) {
     if(closestSource != null) {
         sourceBlocks.push(closestSource);
     }
+}
 
-    ray.angle = Math.atan2(ray.y - radius, ray.x - radius);
+function isLineVisibleInViewport(x1, y1, x2, y2, viewLeft, viewTop, viewWidth, viewHeight) {
+    // Quick check: if both endpoints are completely outside the same edge, line is not visible
+    const viewRight = viewLeft + viewWidth;
+    const viewBottom = viewTop + viewHeight;
+    
+    // If both points are to the left, right, above, or below the viewport
+    if ((x1 < viewLeft && x2 < viewLeft) || 
+        (x1 > viewRight && x2 > viewRight) ||
+        (y1 < viewTop && y2 < viewTop) ||
+        (y1 > viewBottom && y2 > viewBottom)) {
+        return false;
+    }
+    
+    // If either endpoint is inside the viewport, line is visible
+    if ((x1 >= viewLeft && x1 <= viewRight && y1 >= viewTop && y1 <= viewBottom) ||
+        (x2 >= viewLeft && x2 <= viewRight && y2 >= viewTop && y2 <= viewBottom)) {
+        return true;
+    }
+    
+    // Check if line intersects any of the four viewport edges
+    // Top edge
+    if (checkLineIntersection(x1, y1, x2, y2, viewLeft, viewTop, viewRight, viewTop).onLine1) {
+        return true;
+    }
+    
+    // Bottom edge  
+    if (checkLineIntersection(x1, y1, x2, y2, viewLeft, viewBottom, viewRight, viewBottom).onLine1) {
+        return true;
+    }
+    
+    // Left edge
+    if (checkLineIntersection(x1, y1, x2, y2, viewLeft, viewTop, viewLeft, viewBottom).onLine1) {
+        return true;
+    }
+    
+    // Right edge
+    if (checkLineIntersection(x1, y1, x2, y2, viewRight, viewTop, viewRight, viewBottom).onLine1) {
+        return true;
+    }
+    
+    return false;
 }
 
 function checkLineIntersection(
