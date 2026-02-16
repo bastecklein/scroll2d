@@ -1,6 +1,6 @@
 {
     "name": "scroll2d",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "A javascript software game scrollable 2d tilemap rendering engine supporting standard and isometric tiles.",
     "scripts": {
         "build": "webpack --config webpack.common.cjs"
@@ -27,9 +27,9 @@
     "main": "src/index.js",
     "config": {},
     "dependencies": {
-        "common-helpers": "git+ssh://git@github.com:bastecklein/common-helpers.git#main",
-        "input-helper": "git+ssh://git@github.com:bastecklein/input-helper.git#main",
-        "particles2": "git+ssh://git@github.com:bastecklein/particles2.git#main"
+        "common-helpers": "https://github.com/bastecklein/common-helpers",
+        "input-helper": "https://github.com/bastecklein/input-helper",
+        "particles2": "https://github.com/bastecklein/particles2"
     },
     "devDependencies": {
         "webpack": "*",

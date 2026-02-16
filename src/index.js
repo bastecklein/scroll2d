@@ -865,7 +865,7 @@ export class Scroll2dEngine {
 
     setSnowing(val) {
         if(this.particleEngine) {
-            this.particleEngine.rainRunning = val;
+            this.particleEngine.snowRunning = val;
         }
     }
 
