@@ -1,6 +1,6 @@
 import { hexToRGB, distBetweenPoints, removeFromArray, guid } from "common-helpers";
 import { handleInput, clearElementForTouch } from "input-helper";
-import particles2 from "./particles3.js";
+import particles2 from "particles2";
 
 window.addEventListener("resize", globalResize);
 
