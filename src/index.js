@@ -1,6 +1,6 @@
 import { hexToRGB, distBetweenPoints, removeFromArray, guid } from "common-helpers";
 import { handleInput, clearElementForTouch } from "input-helper";
-import particles2 from "particles2";
+import particles2 from "./particles3.js";
 
 window.addEventListener("resize", globalResize);
 
@@ -13,6 +13,94 @@ const PAGE_HEIGHT = 800;
 const MIN_LERP = 0.001;
 const SEGMENTED_RENDER_BUFFER = 1;
 const TARGET_DELTA = 1000 / 60;
+
+// Simple Vertex Shader: Just draws a quad covering the screen
+const vsSource = `
+            attribute vec2 aPosition;
+            varying vec2 vTexCoord;
+            void main() {
+                vTexCoord = aPosition * 0.5 + 0.5;
+                vTexCoord.y = 1.0 - vTexCoord.y; // Flip Y for Canvas coordinate match
+                gl_Position = vec4(aPosition, 0.0, 1.0);
+            }
+        `;
+
+// The Water Fragment Shader: This is where your Three.js logic goes
+const fsSource = `
+            precision mediump float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uSampler;
+
+            // Toggle Uniforms
+            uniform bool uUseGrayscale;
+            uniform bool uUseScanlines;
+            uniform bool uUseVignette;
+            uniform bool uUseTiltShift;
+            uniform bool uUseFog;
+
+            // Control Uniforms
+            uniform float uTime;
+            uniform vec3 uFogColor;
+            uniform float uFogDensity;
+            uniform float uFogUniformity;
+            uniform float uBlurAmount;
+
+            void main() {
+                // 1. BASE FETCH
+                vec4 color = texture2D(uSampler, vTexCoord);
+
+                // 2. TILT-SHIFT (Blur first so it doesn't blur our overlays)
+                if (uUseTiltShift) {
+                    float dist = abs(vTexCoord.y - 0.5);
+                    float blurWidth = smoothstep(0.2, 0.5, dist) * uBlurAmount;
+                    
+                    vec4 blurred = color;
+                    // Simple 3-tap vertical blur
+                    blurred += texture2D(uSampler, vTexCoord + vec2(0.0, blurWidth * 0.01));
+                    blurred += texture2D(uSampler, vTexCoord - vec2(0.0, blurWidth * 0.01));
+                    color = blurred / 3.0;
+                }
+
+                // 3. COLOR EFFECTS (Grayscale & Fog)
+                if (uUseGrayscale) {
+                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    color.rgb = vec3(gray);
+                }
+
+                if (uUseFog) {
+                    // Fog thickness increases towards the top (horizon)
+                    // uFogUniformity: 0.0 = full gradient, 1.0 = completely uniform
+                    float gradientFog = (1.0 - vTexCoord.y) * uFogDensity;
+                    float uniformFog = uFogDensity;
+                    float fogFactor = mix(gradientFog, uniformFog, uFogUniformity);
+                    fogFactor = clamp(fogFactor, 0.0, 1.0);
+                    color.rgb = mix(color.rgb, uFogColor, fogFactor);
+                }
+
+                // 4. OVERLAYS (Scanlines & Vignette)
+                if (uUseScanlines) {
+                    // Scanlines based on vertical coordinate
+                    float scanline = sin(vTexCoord.y * 800.0) * 0.04;
+                    color.rgb -= scanline;
+                }
+
+                if (uUseVignette) {
+                    vec2 uv = vTexCoord - 0.5;
+                    // smoothstep creates the soft circular fade
+                    float vgn = smoothstep(0.5, 0.8, length(uv));
+                    color.rgb = mix(color.rgb, vec3(0.0), vgn * 0.7);
+                }
+
+                gl_FragColor = vec4(color.rgb, 1.0);
+            }
+        `;
+
+function createShader(gl, type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    return shader;
+}
 
 /**
  * @type {Object.<string, Scroll2dEngine>}
@@ -33,6 +121,7 @@ const usedPopperObjects = [];
  * @type {Array<LightInstruction}
  */
 const lightInstructionRecycling = [];
+const processedLightmaps = new WeakMap();
 
 let lastRAF = null;
 let currentFPS = 0;
@@ -72,13 +161,17 @@ export class Scroll2dEngine {
 
         this.selectionColor = options.selectionColor || "#4CAF50";
 
-        this.running = false;
         this.changed = true;
+        this.changeCooldown = 0;
+        this.isChanging = false;
+
+        this.running = false;
         this.staticCallMade = false;
         this.isometricMode = options.isometricMode || false;
         this.fitGridToHeight = options.fitGridToHeight || false;
         this.staticMapInit = false;
         this.didAMove = false;
+        this.dragPointerOutsideCanvas = false;
         this.didMove = false;
         this.isDown = false;
         this.isHold = false;
@@ -128,6 +221,9 @@ export class Scroll2dEngine {
 
         this.lastPaintX = 0;
         this.lastPaintY = 0;
+
+        this.gamepadScrollRate = 12;
+        this.gamepadRef = {};
 
         this.lerpX = 0;
         this.lerpY = 0;
@@ -193,10 +289,12 @@ export class Scroll2dEngine {
         this.screenshotPhase = false;
 
         this.particleEngine = null;
+        this.dustGroundTypeResolver = null;
+        this.dustGroundColors = null;
 
         this.holdTimer = null;
 
-        this.staticMap = {};
+        this.staticMap = new Map();
 
         this.limits = {
             xMin: 0,
@@ -233,6 +331,8 @@ export class Scroll2dEngine {
 
         this.aDownTime = 0;
 
+        this.currentBorderColor = null;
+
         this.pointers = {};
         this.primaryPointer = null;
         this.pointersDown = 0;
@@ -258,33 +358,52 @@ export class Scroll2dEngine {
 
         this.lightCanvas = document.createElement("canvas");
         this.lightFinalRenderCanvas = document.createElement("canvas");
+        this.lightSpriteRenderCanvas = document.createElement("canvas");
+        this.scenePreLightingCanvas = document.createElement("canvas");
+        this.clearRevealCanvas = document.createElement("canvas");
+        this.clearMaskCanvas = document.createElement("canvas");
         this.staticCanvas = document.createElement("canvas");
         this.preRenderCanvas = document.createElement("canvas");
         this.gradientFilterCanvas = document.createElement("canvas");
+
+        this.postProcessCanvas = document.createElement("canvas");
+        this.postProcessContext = this.postProcessCanvas.getContext("webgl");
+        this.overlayCanvas = document.createElement("canvas");
 
         this.canvas = document.createElement("canvas");
         this.filterOverlay = document.createElement("div");
 
         this.context = this.canvas.getContext("2d");
+        this.overlayContext = this.overlayCanvas.getContext("2d");
         this.staticContext = this.staticCanvas.getContext("2d");
         this.lightContext = this.lightCanvas.getContext("2d");
         this.lightFinalRenderContext = this.lightFinalRenderCanvas.getContext("2d");
+        this.lightSpriteRenderContext = this.lightSpriteRenderCanvas.getContext("2d");
+        this.scenePreLightingContext = this.scenePreLightingCanvas.getContext("2d");
+        this.clearRevealContext = this.clearRevealCanvas.getContext("2d");
+        this.clearMaskContext = this.clearMaskCanvas.getContext("2d");
         this.preRenderContext = this.preRenderCanvas.getContext("2d");
         this.gradientFilterContext = this.gradientFilterCanvas.getContext("2d");
 
         if(this.pixelated) {
             pixelateCanvas(this.canvas);
+            pixelateCanvas(this.overlayCanvas);
             pixelateCanvas(this.staticCanvas);
             pixelateCanvas(this.lightCanvas);
             pixelateCanvas(this.lightFinalRenderCanvas);
+            pixelateCanvas(this.lightSpriteRenderCanvas);
+            pixelateCanvas(this.scenePreLightingCanvas);
+            pixelateCanvas(this.clearRevealCanvas);
+            pixelateCanvas(this.clearMaskCanvas);
             pixelateCanvas(this.preRenderCanvas);
             pixelateCanvas(this.gradientFilterCanvas);
         }
 
-        this.holder.appendChild(this.canvas);
+        this.holder.appendChild(this.postProcessCanvas);
+        this.holder.appendChild(this.overlayCanvas);
         this.holder.appendChild(this.filterOverlay);
 
-        clearElementForTouch(this.canvas);
+        clearElementForTouch(this.postProcessCanvas);
 
         handleInput({
             element: instance.filterOverlay,
@@ -304,8 +423,11 @@ export class Scroll2dEngine {
             onInstanceWheel(instance, e);
         });
 
-        absoluteAndFillElement(this.canvas);
+        absoluteAndFillElement(this.postProcessCanvas);
+        absoluteAndFillElement(this.overlayCanvas);
         absoluteAndFillElement(this.filterOverlay);
+
+        this.overlayCanvas.style.pointerEvents = "none";
 
         this.normalizeFilterOverlaySize();
         this.gamepadAllStop();
@@ -314,6 +436,65 @@ export class Scroll2dEngine {
             instance.running = true;
             instance.resize();
         }, 200);
+
+        this.glProgram = null;
+        this.glTexture = null;
+        this.timeLoc = null;
+        this.glLocations = {};
+
+        this.postProcessSettings = {
+            grayscale: false,
+            scanlines: false,
+            vignette: false,
+            tiltShift: false,
+            fog: {
+                enabled: true,
+                density: 0.75,
+                uniformity: 1,
+                blur: 12,
+                color: [0.8, 0.8, 0.9]
+            }
+        };
+
+        this.lightPierceThroughPost = true;
+        this.lightPierceStrength = 0.45;
+
+        wireUpGlContext(this);
+    }
+
+    setGrayscale(enabled) {
+        this.postProcessSettings.grayscale = enabled;
+    }
+
+    setScanlines(enabled) {
+        this.postProcessSettings.scanlines = enabled;
+    }
+
+    setVignette(enabled) {
+        this.postProcessSettings.vignette = enabled;
+    }
+
+    setTiltShift(enabled) {
+        this.postProcessSettings.tiltShift = enabled;
+    }
+
+    setFog(color, density, uniformity, blur) {
+        if(color) {
+            const rgb = hexToRGB(color);
+            this.postProcessSettings.fog.color = [rgb.r / 255, rgb.g / 255, rgb.b / 255];
+        }
+
+        if(density !== undefined) {
+            this.postProcessSettings.fog.density = density;
+        }
+
+        if(uniformity !== undefined) {
+            this.postProcessSettings.fog.uniformity = uniformity;
+        }
+
+        if(blur !== undefined) {
+            this.postProcessSettings.fog.blur = blur;
+        }
     }
 
     destroy() {
@@ -322,8 +503,8 @@ export class Scroll2dEngine {
         delete engineInstances[this.id];
     }
 
-    render(delta) {
-        renderScrollInstance(this, delta);
+    render(delta, time) {
+        renderScrollInstance(this, delta, time);
     }
 
     resize() {
@@ -357,7 +538,7 @@ export class Scroll2dEngine {
             this.initStaticMap();
         }
 
-        this.changed = true;
+        this.alertStaticChanged();
     }
 
     setLimits() {
@@ -429,8 +610,30 @@ export class Scroll2dEngine {
     }
 
     initStaticMap() {
-        this.staticMap = {};
+        this.staticMap = new Map();
         this.staticMapInit = true;
+    }
+
+    getStaticLayer(z, createIfMissing = false) {
+        let layer = this.staticMap.get(z);
+
+        if(layer || !createIfMissing) {
+            return layer;
+        }
+
+        layer = new Map();
+        this.staticMap.set(z, layer);
+
+        return layer;
+    }
+
+    scrollViewBy(x, y) {
+        this.viewX += x;
+        this.viewY += y;
+        this.checkBounds();
+        this.alertStaticChanged();
+        this.didAMove = true;
+        this.notifyViewportChange(true);
     }
 
     positionToCoords(x, y) {
@@ -537,6 +740,10 @@ export class Scroll2dEngine {
         }
     }
 
+    zoomBy(amount) {
+        this.setZoomLevel(this.zoomLevel + amount);
+    }
+
     doZoom(zoomIn, amt) {
         let lvl = this.zoomLevel;
 
@@ -576,7 +783,7 @@ export class Scroll2dEngine {
 
         this.zoomLevel = level;
 
-        if(this.zoomLevel >= 0.9 && this.zoomLevel <= 1.1) {
+        if(this.zoomLevel >= 0.95 && this.zoomLevel <= 1.05) {
             this.zoomLevel = 1;
         }
 
@@ -591,7 +798,7 @@ export class Scroll2dEngine {
         this.setRelativeGridSize();
 
         this.instructionsRecieved = true;
-        this.changed = true;
+        this.alertStaticChanged();
 
         this.forceSceneChange();
 
@@ -613,7 +820,7 @@ export class Scroll2dEngine {
         this.setRelativeGridSize();
         this.notifyViewportChange(true);
 
-        this.changed = true;
+        this.alertStaticChanged();
     }
 
     centerOnCoord(x, y, exactLocation = false) {
@@ -622,8 +829,8 @@ export class Scroll2dEngine {
             this.viewX = x - (this.winWidth / 2);
             this.viewY = y - (this.winHeight / 2);
         } else {
-            this.lastHoverX = x;
-            this.lastHoverY = y;
+            this.lastHoverX = Math.floor(x);
+            this.lastHoverY = Math.floor(y);
 
             if(this.isometricMode) {
                 this.viewX = ((x - y) * this.halfRelativeGridSize - (this.winWidth / 2));
@@ -639,7 +846,9 @@ export class Scroll2dEngine {
         }
 
         this.checkBounds();
-        this.changed = true;
+        this.alertStaticChanged();
+        this.didAMove = true;
+        this.notifyViewportChange(true);
     }
 
     getStaticItem(x, y, z) {
@@ -647,19 +856,19 @@ export class Scroll2dEngine {
             return null;
         }
 
-        if(!this.staticMap[z]) {
-            this.staticMap[z] = {};
+        const layer = this.getStaticLayer(z, false);
+
+        if(!layer) {
+            return null;
         }
 
-        if(!this.staticMap[z][x]) {
-            this.staticMap[z][x] = {};
+        const xMap = layer.get(x);
+
+        if(!xMap) {
+            return null;
         }
 
-        if(this.staticMap[z][x][y]) {
-            return this.staticMap[z][x][y];
-        }
-
-        return null;
+        return xMap.get(y) || null;
     }
 
     setStaticItem(x, y, z, item) {
@@ -667,23 +876,44 @@ export class Scroll2dEngine {
             return null;
         }
 
-        if(!this.staticMap[z]) {
-            this.staticMap[z] = {};
+        const layer = this.getStaticLayer(z, true);
+
+        if(!layer) {
+            return null;
         }
 
-        if(!this.staticMap[z][x]) {
-            this.staticMap[z][x] = {};
+        let xMap = layer.get(x);
+
+        if(item == null) {
+            if(xMap) {
+                xMap.delete(y);
+
+                if(xMap.size === 0) {
+                    layer.delete(x);
+
+                    if(layer.size === 0) {
+                        this.staticMap.delete(z);
+                    }
+                }
+            }
+
+            return;
         }
 
-        this.staticMap[z][x][y] = item;
+        if(!xMap) {
+            xMap = new Map();
+            layer.set(x, xMap);
+        }
+
+        xMap.set(y, item);
     }
 
     setNextDownInSelection(val) {
         this.nextDownSelection = val;
     }
 
-    drawStaticTile(img, x, y, zIndex) {
-        doDrawStaticTile(this, img, x, y, zIndex);
+    drawStaticTile(img, x, y, zIndex, alpha = 1) {
+        doDrawStaticTile(this, img, x, y, zIndex, alpha);
     }
 
     drawTile(img, x, y, zIndex, blocksLight, alpha, angle) {
@@ -703,7 +933,7 @@ export class Scroll2dEngine {
         const step = options.step || 0;
         const meterPercent = options.meterPercent || null;
         const meterColor = options.meterColor || "#ff0000";
-        const alpha = options.alpha || 1;
+        const alpha = options.alpha ?? 1;
         const zIndex = options.zIndex || 0;
         const tileWidth = options.tileWidth || 1;
         const tileHeight = options.tileHeight || 1;
@@ -718,6 +948,10 @@ export class Scroll2dEngine {
         const textYOffset = options.textYOffset || 0;
         const meterYOffset = options.meterYOffset || 0;
         const elevation = options.elevation || 0;
+
+        if(options.lm) {
+            doDrawLightSprite(this, options.lm, img, x, y, tX, tY, step, alpha, zIndex, tileWidth, tileHeight, angle, yOffset, scale, elevation);
+        }
 
         return doDrawSprite(this, img, x, y, tX, tY, step, meterPercent, meterColor, alpha, zIndex, tileWidth, tileHeight, chevrons, angle, centerChevrons, textLabel, yOffset, scale, textSize, textFont, textYOffset, meterYOffset, elevation);
     }
@@ -765,7 +999,7 @@ export class Scroll2dEngine {
 
         this.gridSize = size;
         this.setRelativeGridSize();
-        this.changed = true;
+        this.alertStaticChanged();
         resizeInstance(this);
 
         this.centerOnCoord(position.x, position.y);
@@ -888,7 +1122,7 @@ export class Scroll2dEngine {
 
     setIsometric(val) {
         this.isometricMode = val;
-        this.changed = true;
+        this.alertStaticChanged();
     }
 
     getFPS() {
@@ -910,10 +1144,15 @@ export class Scroll2dEngine {
     }
 
     setColorFilter(color = null, amount = 0.1) {
+
+        if(color == this.colorFilter && amount === this.filterAmount) {
+            return;
+        }
+
         this.darknessMaskColor = null;
         this.colorFilter = color;
         this.filterAmount = amount;
-        this.changed = true;
+        //this.alertStaticChanged();
     }
 
     initParticleEngine() {
@@ -941,6 +1180,138 @@ export class Scroll2dEngine {
         this.particleEngine.playEffect(effect, useX, useY);
     }
 
+    /**
+     * Spawns a smoke/dust poof using sensible defaults.
+     *
+     * Coordinate behavior:
+        * - options.coordSpace = "tile"  (default): x/y are world tile coords
+        * - options.coordSpace = "screen": x/y are viewport pixel coords
+        *
+        * Particle simulation space:
+        * - options.particleSpace = "world" (default): follows camera scroll
+        * - options.particleSpace = "screen": fixed to viewport
+        *
+        * Backward compatibility:
+        * - If options.space is provided and particleSpace is not, it is treated as coordSpace.
+        *
+        * - options.groundType can be used for dust-specific color defaults
+     *
+     * Example:
+     * engine.playSmoke({ x: truckX, y: truckY, mode: "dust", color: "#BCAAA4" });
+     */
+    playSmoke(options = {}) {
+        if(!this.particleEngine) {
+            this.initParticleEngine();
+        }
+
+        if(!this.particleEngine || !this.particleEngine.playSmoke) {
+            return;
+        }
+
+        const coordSpace = options.coordSpace || options.inputSpace || options.space || "tile";
+        const particleSpace = options.particleSpace || "world";
+
+        let useX = Number.isFinite(options.x) ? options.x : 0;
+        let useY = Number.isFinite(options.y) ? options.y : 0;
+
+        if(coordSpace !== "screen") {
+            let px;
+            let py;
+
+            if(this.isometricMode) {
+                px = (useX - useY) * this.halfRelativeGridSize;
+                py = (useX + useY) * this.quarterRelativeGridSize;
+            } else {
+                px = useX * this.relativeGridSize;
+                py = useY * this.relativeGridSize;
+            }
+
+            if(particleSpace === "world") {
+                useX = px;
+                useY = py;
+            } else {
+                useX = px - this.viewX;
+                useY = py - this.viewY;
+            }
+        } else if(particleSpace === "world") {
+            useX += this.viewX;
+            useY += this.viewY;
+        }
+
+        const smokeOptions = Object.assign({}, options, {
+            x: useX,
+            y: useY,
+            space: particleSpace
+        });
+
+        delete smokeOptions.coordSpace;
+        delete smokeOptions.inputSpace;
+        delete smokeOptions.particleSpace;
+
+        this.particleEngine.playSmoke(smokeOptions);
+    }
+
+    /**
+     * Convenience alias for dust poofs with ground-type aware defaults.
+     *
+     * Example:
+     * engine.playDust({ x: roverX, y: roverY, groundType: "sand" });
+     */
+    playDust(options = {}) {
+        const dustOptions = Object.assign({}, options, {
+            mode: "dust"
+        });
+
+        if(!dustOptions.groundType && this.dustGroundTypeResolver) {
+            try {
+                dustOptions.groundType = this.dustGroundTypeResolver(
+                    Number.isFinite(dustOptions.x) ? dustOptions.x : 0,
+                    Number.isFinite(dustOptions.y) ? dustOptions.y : 0,
+                    dustOptions
+                );
+            } catch {
+                // Ignore resolver failures and fall back to default dust palette.
+            }
+        }
+
+        if(!dustOptions.groundColors && this.dustGroundColors) {
+            dustOptions.groundColors = this.dustGroundColors;
+        }
+
+        this.playSmoke(dustOptions);
+    }
+
+    /**
+     * Sets a callback to resolve dust ground types automatically.
+     *
+     * Callback signature:
+     * (x, y, options) => string groundType
+     */
+    setDustGroundTypeResolver(resolver) {
+        if(typeof resolver === "function") {
+            this.dustGroundTypeResolver = resolver;
+        } else {
+            this.dustGroundTypeResolver = null;
+        }
+    }
+
+    /**
+     * Sets shared ground palettes for dust effects.
+     *
+     * Example value:
+     * {
+     *   sand: { color: "#DCC9A3", detailColor: "#B59C79" },
+     *   ash:  { color: "#A7A7A7", detailColor: "#6F6F6F" }
+     * }
+     */
+    setDustGroundColors(groundColors = null) {
+        if(groundColors && typeof groundColors === "object") {
+            this.dustGroundColors = groundColors;
+        } else {
+            this.dustGroundColors = null;
+        }
+    }
+
     drawLine(color, x, y, x2, y2, zIndex = 0, centerInTile = false, lineWidth = 1, dashed = false) {
         doDrawLine(this, color, x, y, x2, y2, zIndex, centerInTile, lineWidth, dashed);
     }
@@ -950,8 +1321,19 @@ export class Scroll2dEngine {
     }
 
     setBorderColor(color) {
+
+        if(color == this.currentBorderColor) {
+            return;
+        }
+
+        this.currentBorderColor = color;
+
+        if(!this.filterOverlay) {
+            return;
+        }
+
         if(color) {
-            this.style.border = "4px solid " + color;
+            this.filterOverlay.style.border = "4px solid " + color;
             this.filterOverlay.style.top = "0px";
             this.filterOverlay.style.left = "0px";
             this.filterOverlay.style.width = "calc(100% - 8px)";
@@ -986,17 +1368,24 @@ export class Scroll2dEngine {
      * Call this after zoom changes to optimize performance
      */
     optimizeForZoomLevel() {
-        if(this.zoomLevel < 0.3) {
-            // Very zoomed out - prioritize performance
-            this.setFPSLimiter(3); // 20fps max
+        
+        if(this.zoomLevel < 0.15) {
+            this.setFPSLimiter(12);
+            this.setFastRenderMode(true);
+        } else if(this.zoomLevel < 0.2) {
+            this.setFPSLimiter(8);
+            this.setFastRenderMode(true);
+        } else if(this.zoomLevel < 0.25) {
+            this.setFPSLimiter(6);
+            this.setFastRenderMode(true);
+        } else if(this.zoomLevel < 0.3) {
+            this.setFPSLimiter(4);
             this.setFastRenderMode(true);
         } else if(this.zoomLevel < 0.6) {
-            // Moderately zoomed out
-            this.setFPSLimiter(2); // 30fps max
+            this.setFPSLimiter(2);
             this.setFastRenderMode(true);
         } else {
-            // Normal or zoomed in - prioritize quality
-            this.setFPSLimiter(1); // 60fps
+            this.setFPSLimiter(1);
             this.setFastRenderMode(false);
         }
     }
@@ -1043,14 +1432,14 @@ export class Scroll2dEngine {
     modifyViewX(amount) {
         this.viewX += amount;
         this.checkBounds();
-        this.changed = true;
+        this.alertStaticChanged();
         this.notifyViewportChange();
     }
 
     modifyViewY(amount) {
         this.viewY += amount;
         this.checkBounds();
-        this.changed = true;
+        this.alertStaticChanged();
         this.notifyViewportChange();
     }
 
@@ -1066,24 +1455,18 @@ export class Scroll2dEngine {
         onGamepadUp(this, button);
     }
 
-    drawLight(x, y, radius = this.relativeGridSize, color = "#ffffff", tX = x, tY = y, step = 0, intensity = 0.2) {
-        doDrawLight(this, x, y, radius, color, tX, tY, step, intensity);
+    gamepadAxis(axis, value) {
+        onGamepadAxis(this, axis, value);
+    }
+
+    drawLight(x, y, radius = this.relativeGridSize, color = "#ffffff", tX = x, tY = y, step = 0, intensity = 0.2, mode = "glow") {
+        doDrawLight(this, x, y, radius, color, tX, tY, step, intensity, mode);
     }
 
     gamepadAllStop() {
-        for(const button in this.padScrolling) {
-            this.padScrolling[button] = false;
-        }
-
-        for(const button in this.padRightScrolling) {
-            this.padRightScrolling[button] = false;
-        }
-
-        for(const button in this.padTriggers) {
-            this.padTriggers[button] = false;
-        }
-
+        this.gamepadRef = {};
         this.aDownTime = 0;
+        this.ltDownTime = 0;
     }
 
     getCanvasStream(fps = 25) {
@@ -1092,6 +1475,32 @@ export class Scroll2dEngine {
 
     getDrawCanvas() {
         return this.canvas;
+    }
+
+    alertStaticChanged() {
+
+        if(this.zoomLevel >= 0.6) {
+            this.changed = true;
+            return;
+        }
+
+        if(this.changeCooldown > 0) {
+            this.changeCooldown = 3;
+        } else {
+            this.isChanging = true;
+        }
+    }
+
+    getIsChanging() {
+        return this.isChanging;
+    }
+
+    notifyReadyForChange() {
+        if(this.isChanging) {
+            this.isChanging = false;
+            this.changeCooldown = 3;
+            this.changed = true;
+        }
     }
 }
 
@@ -1115,6 +1524,8 @@ class Coord {
 
         this.x = Math.floor(this.px);
         this.y = Math.floor(this.py);
+        this.ax = x;
+        this.ay = y;
     }
 }
 
@@ -1181,6 +1592,8 @@ class RenderItem {
         this.dashedLine = false;
         this.isText = null;
         this.textFont = null;
+        this.blockerImg = null;
+        this.renderAboveLighting = false;
     }
 }
 
@@ -1208,12 +1621,13 @@ class TextPopItem {
 }
 
 class LightInstruction {
-    constructor(x, y, radius, color, intensity) {
+    constructor(x, y, radius, color, intensity, mode = "glow") {
         this.x = x;
         this.y = y;
         this.radius = radius;
         this.color = color;
         this.intensity = intensity;
+        this.mode = mode;
     }
 }
 
@@ -1239,13 +1653,21 @@ function resizeInstance(engine) {
         return;
     }
 
-    engine.changed = true;
+    engine.alertStaticChanged();
 
     engine.winWidth = engine.holder.offsetWidth;
     engine.winHeight = engine.holder.offsetHeight;
 
     engine.width = Math.round(engine.winWidth * engine.scale);
     engine.height = Math.round(engine.winHeight * engine.scale);
+
+    engine.postProcessCanvas.width = engine.width;
+    engine.postProcessCanvas.height = engine.height;
+
+    engine.postProcessContext.viewport(0, 0, engine.width, engine.height);
+
+    engine.overlayCanvas.width = engine.width;
+    engine.overlayCanvas.height = engine.height;
 
     engine.canvas.width = engine.width;
     engine.canvas.height = engine.height;
@@ -1259,6 +1681,20 @@ function resizeInstance(engine) {
     engine.lightFinalRenderCanvas.width = engine.width;
     engine.lightFinalRenderCanvas.height = engine.height;
 
+    engine.lightSpriteRenderCanvas.width = engine.width;
+    engine.lightSpriteRenderCanvas.height = engine.height;
+
+    // Keep clear-light compositing buffers in CSS pixel space so coordinates
+    // from the render pipeline (which are CSS-space) line up across DPR changes.
+    engine.scenePreLightingCanvas.width = engine.winWidth;
+    engine.scenePreLightingCanvas.height = engine.winHeight;
+
+    engine.clearRevealCanvas.width = engine.winWidth;
+    engine.clearRevealCanvas.height = engine.winHeight;
+
+    engine.clearMaskCanvas.width = engine.winWidth;
+    engine.clearMaskCanvas.height = engine.winHeight;
+
     if(engine.fitGridToHeight && engine.mapHeight > 0) {
         engine.gridSize = engine.winHeight / engine.mapHeight;
     }
@@ -1266,16 +1702,11 @@ function resizeInstance(engine) {
     engine.context.setTransform(1, 0, 0, 1, 0, 0);
     engine.context.scale(engine.scale, engine.scale);
 
+    engine.overlayContext.setTransform(1, 0, 0, 1, 0, 0);
+    engine.overlayContext.scale(engine.scale, engine.scale);
+
     engine.staticContext.setTransform(1, 0, 0, 1, 0, 0);
     engine.staticContext.scale(engine.scale, engine.scale);
-
-    /*
-    engine.lightContext.setTransform(1, 0, 0, 1, 0, 0);
-    engine.lightContext.scale(engine.scale, engine.scale);*/
-
-    /*
-    engine.lightFinalRenderContext.setTransform(1, 0, 0, 1, 0, 0);
-    engine.lightFinalRenderContext.scale(engine.scale, engine.scale);*/
 
     engine.setRelativeGridSize();
 
@@ -1285,7 +1716,7 @@ function resizeInstance(engine) {
     engine.setLimits();
     engine.setViewBounds();
 
-    engine.changed = true;
+    engine.alertStaticChanged();
 }
 
 function globalRender(t) {
@@ -1307,12 +1738,12 @@ function globalRender(t) {
 
     for(const id in engineInstances) {
         const engine = engineInstances[id];
-        engine.render(delta);
+        engine.render(delta, t);
         engine.update(t, delta);
     }
 }
 
-function renderScrollInstance(engine, delta) {
+function renderScrollInstance(engine, delta, time) {
     if(!engine.running) {
         return;
     }
@@ -1330,12 +1761,18 @@ function renderScrollInstance(engine, delta) {
         resizeInstance(engine);
     }
 
+    if(engine.winWidth != engine.holder.offsetWidth || engine.winHeight != engine.holder.offsetHeight) {
+        resizeInstance(engine);
+    }
+
     engine.lastScale = engine.scale;
 
     engine.renderOrder = 0;
     engine.lightBlockers = [];
 
     if(engine.particleEngine) {
+        engine.particleEngine.offsetX = engine.viewX;
+        engine.particleEngine.offsetY = engine.viewY;
         engine.particleEngine.update(delta);
     }
 
@@ -1348,6 +1785,8 @@ function renderScrollInstance(engine, delta) {
 
     let fullCanvas = null;
     let fullContext = null;
+    const postProcessOverlayQueue = [];
+    const postProcessLightOverlayInstructions = [];
 
     if(engine.fullMapRenderCallback) {
         const umapTotalWidth = engine.mapWidth * engine.gridSize;
@@ -1370,8 +1809,12 @@ function renderScrollInstance(engine, delta) {
 
     engine.fpsCounter++;
 
+
+    
     // Adaptive FPS limiting based on render load
     let dynamicFpsLimiter = engine.fpsLimiter;
+
+
     const totalRenderItems = engine.drawQueue.length + engine.aboveFoldDrawQueue.length;
     
     if(totalRenderItems > 1000) {
@@ -1380,7 +1823,13 @@ function renderScrollInstance(engine, delta) {
         dynamicFpsLimiter = Math.max(engine.fpsLimiter, 2); // Limit to 30fps when moderate items
     }
 
-    if(engine.fpsCounter < dynamicFpsLimiter) {
+    if(engine.fpsCounter < dynamicFpsLimiter && !fullContext) {
+        if(engine.drawFunction) {
+            engine.drawFunction(false, true);
+        }
+
+        renderScrollPostProcessing(engine, delta, time);
+
         return;
     }
 
@@ -1399,7 +1848,17 @@ function renderScrollInstance(engine, delta) {
     }
 
     if(!engine.instructionsRecieved) {
+        renderScrollPostProcessing(engine, delta, time);
         return;
+    }
+
+    if(engine.changeCooldown > 0) {
+        engine.changeCooldown--;
+
+        if(engine.changeCooldown <= 0) {
+            engine.changeCooldown = 0;
+            engine.changed = true;
+        }
     }
 
     if(engine.changed) {
@@ -1416,6 +1875,7 @@ function renderScrollInstance(engine, delta) {
 
     engine.context.clearRect(0, 0, engine.width, engine.height);
     engine.context.globalCompositeOperation = "source-over";
+    engine.overlayContext.clearRect(0, 0, engine.width, engine.height);
 
     if(engine.staticCanvas && engine.staticCanvas.width > 0) {
         engine.context.save();
@@ -1425,13 +1885,23 @@ function renderScrollInstance(engine, delta) {
     }
 
     if(engine.drawQueue.length > 0) {
+        engine.drawQueue.sort(sortRenderItemReverse);
+
+        
         // Skip expensive sorting in fast render mode with many items
         if(!engine.useFastRenderMode || engine.drawQueue.length < 200) {
             engine.drawQueue.sort(sortRenderItemReverse);
         }
+            
 
         while(engine.drawQueue.length > 0) {
             const item = engine.drawQueue.pop();
+
+            if(item.renderAboveLighting) {
+                postProcessOverlayQueue.push(item);
+                continue;
+            }
+
             performRenderOnItem(engine, item, engine.context, fullContext);
             usedRenderObjects.push(item);
         }
@@ -1439,7 +1909,13 @@ function renderScrollInstance(engine, delta) {
 
     engine.context.globalAlpha = 1;
 
-    if(engine.lightSources.length > 0 || engine.colorFilter != null) {
+    if(engine.particleEngine) {
+        engine.particleEngine.draw(engine.context, "lit");
+    }
+
+    const hadLightSources = engine.lightSources.length > 0;
+
+    if(hadLightSources || engine.colorFilter != null) {
         if(engine.colorFilter != null && engine.filterAmount > 0) {
             const darkRGB = hexToRGB(engine.colorFilter);
 
@@ -1468,49 +1944,99 @@ function renderScrollInstance(engine, delta) {
         engine.lightContext.fillRect(0, 0, engine.width, engine.height);
 
         engine.lightFinalRenderContext.clearRect(0, 0, engine.width, engine.height);
+        engine.lightFinalRenderContext.globalCompositeOperation = "lighter";
+        engine.lightSpriteRenderContext.clearRect(0, 0, engine.width, engine.height);
+        engine.lightSpriteRenderContext.globalCompositeOperation = "lighter";
+
+        const imageLightSources = [];
+        let hasClearModeLight = false;
 
         while(engine.lightSources.length > 0) {
             const source = engine.lightSources.pop();
+
+            if(source.img) {
+                imageLightSources.push(source);
+                continue;
+            }
 
             const useX = (0.5 + (source.x - engine.viewX)) | 0;
             const useY = (0.5 + (source.y - engine.viewY)) | 0;
 
             const radius = source.radius;
+            const litColor = getLightMaskColor(source.color);
+            const sourceMode = source.mode || "glow";
 
             ligthenGradient(
                 engine,
-                engine.lightContext, 
+                engine.lightFinalRenderContext, 
                 useX, 
                 useY, 
                 radius, 
                 "rgba(" + 
-                    source.color.r + "," + 
-                    source.color.g + "," + 
-                    source.color.b + "," + 
+                    litColor.r + "," + 
+                    litColor.g + "," + 
+                    litColor.b + "," + 
                     source.intensity + 
                 ")", 
                 "rgba(" + 
-                    source.color.r + "," + 
-                    source.color.g + "," + 
-                    source.color.b + ",0)"
+                    litColor.r + "," + 
+                    litColor.g + "," + 
+                    litColor.b + ",0)"
             );
+
+            if((engine.filterAmount > 0 || engine.postProcessSettings.fog.enabled) && engine.lightPierceThroughPost) {
+                postProcessLightOverlayInstructions.push({
+                    mode: sourceMode,
+                    x: useX,
+                    y: useY,
+                    radius: radius,
+                    color: litColor,
+                    intensity: source.intensity
+                });
+
+                if(sourceMode === "clear") {
+                    hasClearModeLight = true;
+                }
+            }
 
             lightInstructionRecycling.push(source);
         }
 
-        /*
+        if(imageLightSources.length > 0) {
+            imageLightSources.sort(sortRenderItemReverse);
 
-        if(engine.canvas && engine.width > 0 && engine.height > 0) {
-            engine.lightFinalRenderContext.globalCompositeOperation = "source-over";
-            engine.lightFinalRenderContext.drawImage(engine.canvas, 0, 0);
+            while(imageLightSources.length > 0) {
+                const source = imageLightSources.pop();
+                handleImageLightmap(engine, source, fullContext);
+            }
         }
 
-        if(engine.lightCanvas && engine.width > 0 && engine.height > 0) {
-            engine.lightFinalRenderContext.globalCompositeOperation = "source-in";
-            engine.lightFinalRenderContext.drawImage(engine.lightCanvas, 0, 0);
-        }*/
+        engine.lightContext.save();
+        engine.lightContext.globalCompositeOperation = "source-over";
+        engine.lightContext.drawImage(engine.lightFinalRenderCanvas, 0, 0);
+        engine.lightContext.globalCompositeOperation = "lighter";
+        engine.lightContext.globalAlpha = engine.filterAmount;
+        engine.lightContext.drawImage(engine.lightSpriteRenderCanvas, 0, 0);
+        engine.lightContext.globalAlpha = 1;
+        engine.lightContext.restore();
 
         engine.context.save();
+
+        if(hasClearModeLight) {
+            engine.scenePreLightingContext.clearRect(0, 0, engine.winWidth, engine.winHeight);
+            engine.scenePreLightingContext.drawImage(
+                engine.canvas,
+                0,
+                0,
+                engine.width,
+                engine.height,
+                0,
+                0,
+                engine.winWidth,
+                engine.winHeight
+            );
+        }
+
         engine.context.globalCompositeOperation = "multiply";
         //engine.context.drawImage(engine.lightFinalRenderCanvas, 0, 0);
         engine.context.drawImage(engine.lightCanvas, 0, 0);
@@ -1522,18 +2048,24 @@ function renderScrollInstance(engine, delta) {
 
         while(engine.aboveFoldDrawQueue.length > 0) {
             const item = engine.aboveFoldDrawQueue.pop();
+
+            if(item.renderAboveLighting) {
+                postProcessOverlayQueue.push(item);
+                continue;
+            }
+
             performRenderOnItem(engine, item, engine.context, fullContext);
             usedRenderObjects.push(item);
         }
     }
 
     if(engine.particleEngine) {
-        engine.particleEngine.draw(engine.context);
+        engine.particleEngine.draw(engine.context, "unlit");
     }
 
     if(engine.screenshotPhase) {
         engine.screenshotPhase = false;
-        engine.changed = true;
+        engine.alertStaticChanged();
 
         engine.screenshotContext.drawImage(engine.canvas, 0, 0);
 
@@ -1628,6 +2160,122 @@ function renderScrollInstance(engine, delta) {
         }
   
     }
+
+    renderScrollPostProcessing(engine, delta, time);
+    renderOverlayPass(engine, postProcessOverlayQueue, postProcessLightOverlayInstructions);
+}
+
+function renderOverlayPass(engine, postProcessOverlayQueue, postProcessLightOverlayInstructions) {
+    const context = engine.overlayContext;
+
+    if(!context) {
+        return;
+    }
+
+    if(postProcessLightOverlayInstructions.length > 0) {
+        const pierceStrength = parseFloat(engine.lightPierceStrength);
+        const baseAlpha = Math.max(0, Math.min(1, isNaN(pierceStrength) ? 0.45 : pierceStrength));
+        const clearSources = [];
+
+        context.save();
+        context.globalCompositeOperation = "lighter";
+
+        for(const source of postProcessLightOverlayInstructions) {
+            if(source.mode === "clear") {
+                clearSources.push(source);
+                continue;
+            }
+
+            const glowAlpha = Math.max(0, Math.min(1, (source.intensity || 0) * baseAlpha));
+
+            ligthenGradient(
+                engine,
+                context,
+                source.x,
+                source.y,
+                source.radius,
+                "rgba(" + source.color.r + "," + source.color.g + "," + source.color.b + "," + glowAlpha + ")",
+                "rgba(" + source.color.r + "," + source.color.g + "," + source.color.b + ",0)"
+            );
+        }
+
+        context.restore();
+
+        if(clearSources.length > 0) {
+            revealClearLights(engine, context, clearSources);
+        }
+
+        postProcessLightOverlayInstructions.length = 0;
+    }
+
+    for(const item of postProcessOverlayQueue) {
+        performRenderOnItem(engine, item, context, null);
+        usedRenderObjects.push(item);
+    }
+
+    postProcessOverlayQueue.length = 0;
+}
+
+function revealClearLights(engine, context, clearSources) {
+    const revealContext = engine.clearRevealContext;
+    const maskContext = engine.clearMaskContext;
+    const bufferWidth = maskContext.canvas.width;
+    const bufferHeight = maskContext.canvas.height;
+
+    maskContext.clearRect(0, 0, bufferWidth, bufferHeight);
+    maskContext.globalCompositeOperation = "lighter";
+
+    for(const source of clearSources) {
+        const revealStrength = Math.max(0.4, Math.min(1, source.intensity || 1));
+        const revealGradient = maskContext.createRadialGradient(source.x, source.y, 0, source.x, source.y, source.radius);
+        revealGradient.addColorStop(0, "rgba(255,255,255," + revealStrength + ")");
+        revealGradient.addColorStop(0.7, "rgba(255,255,255," + (revealStrength * 0.55) + ")");
+        revealGradient.addColorStop(1, "rgba(255,255,255,0)");
+
+        maskContext.fillStyle = revealGradient;
+        maskContext.beginPath();
+        maskContext.arc(source.x, source.y, source.radius, 0, TWO_π);
+        maskContext.fill();
+    }
+
+    maskContext.globalCompositeOperation = "source-over";
+
+    revealContext.clearRect(0, 0, bufferWidth, bufferHeight);
+    revealContext.drawImage(engine.scenePreLightingCanvas, 0, 0);
+    revealContext.globalCompositeOperation = "destination-in";
+    revealContext.drawImage(engine.clearMaskCanvas, 0, 0);
+    revealContext.globalCompositeOperation = "source-over";
+
+    context.save();
+    context.globalCompositeOperation = "source-over";
+    context.drawImage(engine.clearRevealCanvas, 0, 0);
+    context.restore();
+}
+
+function renderScrollPostProcessing(engine, delta, time) {
+    const gl = engine.postProcessContext;
+
+    // Step B: Update WebGL with the 2D Canvas content
+    gl.useProgram(engine.glProgram);
+    
+    // Send the toggles to the GPU
+    gl.uniform1i(engine.glLocations.uUseGrayscale, engine.postProcessSettings.grayscale ? 1 : 0);
+    gl.uniform1i(engine.glLocations.uUseScanlines, engine.postProcessSettings.scanlines ? 1 : 0);
+    gl.uniform1i(engine.glLocations.uUseVignette, engine.postProcessSettings.vignette ? 1 : 0);
+    gl.uniform1i(engine.glLocations.uUseTiltShift, engine.postProcessSettings.tiltShift ? 1 : 0);
+    gl.uniform1i(engine.glLocations.uUseFog, engine.postProcessSettings.fog.enabled ? 1 : 0);
+
+    gl.uniform3f(engine.glLocations.uFogColor, engine.postProcessSettings.fog.color[0], engine.postProcessSettings.fog.color[1], engine.postProcessSettings.fog.color[2]);
+    gl.uniform1f(engine.glLocations.uFogDensity, engine.postProcessSettings.fog.density);
+    gl.uniform1f(engine.glLocations.uFogUniformity, engine.postProcessSettings.fog.uniformity);
+    gl.uniform1f(engine.glLocations.uBlurAmount, engine.postProcessSettings.fog.blur);
+    
+    gl.bindTexture(gl.TEXTURE_2D, engine.glTexture);
+    // This is the bridge: uploading the 2D canvas to the GPU texture
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, engine.canvas);
+
+    // Step C: Draw the result
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
 }
 
 function absoluteAndFillElement(element) {
@@ -1756,6 +2404,8 @@ function onInstanceMove(engine, e) {
     let x = e.x;
     let y = e.y;
 
+    const pointerInCanvas = isPointerInsideCanvas(engine, e);
+
     if(engine.pointerListener) {
         engine.pointerListener("move", x, y, e.type, e.which);
     }
@@ -1769,10 +2419,20 @@ function onInstanceMove(engine, e) {
         return;
     }
 
-    let oldX = 0;
-    let oldY = 0;
+    if((e.type == "mouse" || e.type == "pen") && !pointerInCanvas) {
+        if(engine.didMove) {
+            engine.dragPointerOutsideCanvas = true;
+        }
 
-    if(engine.curX) {
+        engine.curX = x;
+        engine.curY = y;
+        return;
+    }
+
+    let oldX = x;
+    let oldY = y;
+
+    if(Number.isFinite(engine.curX) && Number.isFinite(engine.curY)) {
         oldX = engine.curX;
         oldY = engine.curY;
     }
@@ -1804,7 +2464,12 @@ function onInstanceMove(engine, e) {
     }
 
     if(engine.didMove) {
-        engine.changed = true;
+        if(engine.dragPointerOutsideCanvas) {
+            engine.dragPointerOutsideCanvas = false;
+            return;
+        }
+
+        engine.alertStaticChanged();
 
         if(engine.isPainting && engine.paintFunction) {
             if(engine.lastPaintX == position.x && engine.lastPaintY == position.y) {
@@ -1945,9 +2610,28 @@ function onInstanceUp(engine, e) {
 
     engine.isDown = false;
     engine.didMove = false;
+    engine.dragPointerOutsideCanvas = false;
 
     engine.actualX = 0;
     engine.actualY = 0;
+}
+
+function isPointerInsideCanvas(engine, e) {
+    if(!engine.filterOverlay || !engine.filterOverlay.getBoundingClientRect) {
+        return true;
+    }
+
+    if(!Number.isFinite(e.pageX) || !Number.isFinite(e.pageY)) {
+        return true;
+    }
+
+    const rect = engine.filterOverlay.getBoundingClientRect();
+    const offsetX = typeof window != "undefined" ? window.pageXOffset : 0;
+    const offsetY = typeof window != "undefined" ? window.pageYOffset : 0;
+    const clientX = e.pageX - offsetX;
+    const clientY = e.pageY - offsetY;
+
+    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 }
 
 function onInstanceWheel(engine, e) {
@@ -2109,7 +2793,12 @@ function doStaticRender(engine, fullContext) {
                     continue;
                 }
 
+                if(renderItem.alpha != undefined && renderItem.alpha != null) {
+                    engine.staticContext.globalAlpha = renderItem.alpha;
+                }
+
                 engine.staticContext.drawImage(renderItem.img, renderItem.x, renderItem.y, renderItem.w, renderItem.h);
+                engine.staticContext.globalAlpha = 1;
             }
         }
     }
@@ -2140,20 +2829,7 @@ function performRenderOnItem(engine, item, context, fullContext) {
     let useX, useY;
 
     if(engine.isometricMode) {
-        /*
-        const offsetX = (item.tileWidth - 1) * engine.halfRelativeGridSize;
-        const offsetY = (item.tileHeight - 1) * engine.quarterRelativeGridSize;
 
-        useX = item.x - engine.viewX - offsetX;
-        useY = item.y - engine.viewY - offsetY;*/
-
-
-        /*
-        useX = item.x - engine.viewX - ((item.tileWidth - 1) * engine.halfRelativeGridSize);
-        useY = item.y - engine.viewY - ((item.tileHeight - 1) * engine.quarterRelativeGridSize);
-        */
-
-        
         useX = item.x - engine.viewX;
         useY = item.y - engine.viewY;
         
@@ -2227,7 +2903,7 @@ function performRenderOnItem(engine, item, context, fullContext) {
         context.globalAlpha = 1;
     }
 
-    if(item.segmentX > 0) {
+    if(item.segmentX > -1) {
         performSegmentedRender(engine, context, item, useX, useY);
         return;
     }
@@ -2624,11 +3300,11 @@ function ligthenGradient(engine, context, x, y, radius, from, off) {
     }
     
     if(engine.isometricMode) {
-        context.save();
-        context.globalCompositeOperation = "lighten";
+        //context.save();
+        //context.globalCompositeOperation = "lighten";
         context.drawImage(engine.preRenderCanvas, x - radius, y - radius);
 
-        context.restore();
+        //context.restore();
         return;
     }
 
@@ -2898,32 +3574,26 @@ function checkLineIntersection(
     return result;
 }
 
-function doDrawStaticTile(engine, img, x, y, zIndex) {
-    if(img == undefined) {
+function doDrawStaticTile(engine, img, x, y, zIndex = 0, alpha = 1) {
+    if(img === undefined) {
         return;
     }
 
-    if(x < 0 || x > engine.mapWidth) {
-        return;
-    }
+    if(engine.mapWidth >= 0 && engine.mapHeight >= 0) {
+        if(x < 0 || x > engine.mapWidth) {
+            return;
+        }
 
-    if(y < 0 || y > engine.mapHeight) {
-        return;
-    }
-
-    if(!zIndex) {
-        zIndex = 0;
-    }
-
-    if(zIndex > engine.staticMaxZIndex) {
-        engine.staticMaxZIndex = zIndex;
+        if(y < 0 || y > engine.mapHeight) {
+            return;
+        }
         engine.initStaticMap();
 
-        engine.changed = true;
+        engine.alertStaticChanged();
     }
 
     if(engine.fullMapRenderCallback) {
-        doDrawTile(engine, img, x, y, zIndex, false, 1, 0);
+        doDrawTile(engine, img, x, y, zIndex, false, alpha, 0);
         return;
     }
 
@@ -2937,25 +3607,41 @@ function doDrawStaticTile(engine, img, x, y, zIndex) {
 
     const existingItem = engine.getStaticItem(x, y, zIndex);
 
+    
+
     if(existingItem == null) {
-        engine.setStaticItem(x, y, zIndex, buildRenderObjectForTile(engine, img, x, y));
-        engine.changed = true;
+        const renderOb = buildRenderObjectForTile(engine, img, x, y);
+
+        if(renderOb) {
+            renderOb.alpha = alpha;
+        }
+        
+
+        engine.setStaticItem(x, y, zIndex, renderOb);
+        engine.alertStaticChanged();
     } else {
         if(existingItem.img != img) {
+            const item = buildRenderObjectForTile(engine, img, x, y, existingItem);
+
+            if(item) {
+                item.alpha = alpha;
+            }
+            
+            
             engine.setStaticItem(
                 x,
                 y,
                 zIndex, 
-                buildRenderObjectForTile(engine, img, x, y, existingItem)
+                item
             );
 
-            engine.changed = true;
+            engine.alertStaticChanged();
         }
     }
 }
 
 function doDrawTile(engine, img, x, y, zIndex = 0, blocksLight = false, alpha = 1, angle = 0) {
-    if(!engine.drawQueue || img == undefined || img == null) {
+    if(!engine.drawQueue || img === undefined || img === null) {
         return;
     }
 
@@ -2963,19 +3649,6 @@ function doDrawTile(engine, img, x, y, zIndex = 0, blocksLight = false, alpha = 
 
     if(!engine.checkVisibility(x, y) && !engine.fullMapRenderCallback) {
         return;
-    }
-
-    // Level-of-Detail optimization: Skip very small tiles when zoomed out
-    if(engine.zoomLevel < 0.25 && !engine.fullMapRenderCallback) {
-        // At very low zoom levels, only render every 4th tile to reduce load
-        if((x % 4 !== 0) || (y % 4 !== 0)) {
-            return;
-        }
-    } else if(engine.zoomLevel < 0.5 && !engine.fullMapRenderCallback) {
-        // At low zoom levels, only render every 2nd tile
-        if((x % 2 !== 0) || (y % 2 !== 0)) {
-            return;
-        }
     }
 
     const item = buildRenderObjectForTile(engine, img, x, y, null);
@@ -2997,7 +3670,12 @@ function doDrawTile(engine, img, x, y, zIndex = 0, blocksLight = false, alpha = 
 }
 
 function buildRenderObjectForTile(engine, img, x, y, item) {
-    if(item == undefined || item == null) {
+
+    if(img == null) {
+        return null;
+    }
+
+    if(item === undefined || item === null) {
         item = getFreshRenderItem(engine);
     }
 
@@ -3090,6 +3768,8 @@ function getFreshRenderItem(engine) {
         ri.dashedLine = false;
         ri.isText = null;
         ri.textFont = null;
+        ri.blockerImg = null;
+        ri.renderAboveLighting = false;
     }
 
     ri.ro = engine.renderOrder;
@@ -3099,13 +3779,8 @@ function getFreshRenderItem(engine) {
     return ri;
 }
 
-function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor, alpha, zIndex, tileWidth, tileHeight, chevrons, angle, centerChevrons, textLabel, yOffset, scale, textSize, textFont, textYOffset, meterYOffset, elevation) {
+function doDrawLightSprite(engine, img, blockerImg, x, y, tX, tY, step, alpha, zIndex, tileWidth, tileHeight, angle, yOffset, scale, elevation) {
     if(!img) {
-        return;
-    }
-
-    if(engine.fullMapRenderCallback) {
-        doDrawTile(engine, img, x, y, zIndex, false, alpha, angle);
         return;
     }
 
@@ -3121,10 +3796,6 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
         elevation = 0;
     }
 
-    if(engine.isometricMode && tX == x && tY == y && !engine.useFastRenderMode) {
-        return drawBigStationary(engine, img, x, y, tX, tY, step, meterPercent, meterColor, alpha, zIndex, tileWidth, tileHeight, chevrons, angle, centerChevrons, textLabel, yOffset, scale, textSize, textFont, textYOffset, meterYOffset, elevation);
-    }
-
     const item = getFreshRenderItem(engine);
 
     item.tX = x;
@@ -3134,6 +3805,7 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
     item.angle = angle;
 
     item.img = img;
+    item.blockerImg = blockerImg;
     item.zIndex = zIndex;
 
     item.tileHeight = tileHeight;
@@ -3228,9 +3900,175 @@ function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor,
     }
 
     if(elevation > 0) {
+        nearness += elevation;
+        dY -= Math.round((elevation * engine.gridSize) * engine.zoomLevel);
+    }
+
+    item.x = dX;
+    item.y = dY;
+    item.w = dW;
+    item.h = dH;
+
+    item.nearness = nearness;
+
+    engine.lightSources.push(item);
+}
+
+function doDrawSprite(engine, img, x, y, tX, tY, step, meterPercent, meterColor, alpha, zIndex, tileWidth, tileHeight, chevrons, angle, centerChevrons, textLabel, yOffset, scale, textSize, textFont, textYOffset, meterYOffset, elevation) {
+    if(!img) {
+        return;
+    }
+
+    if(engine.fullMapRenderCallback) {
+        doDrawTile(engine, img, x, y, zIndex, false, alpha, angle);
+        return;
+    }
+
+    if(!engine.checkVisibility(x, y)) {
+        return;
+    }
+
+    engine.instructionsRecieved = true;
+
+    elevation = parseFloat(elevation);
+
+    if(isNaN(elevation)) {
+        elevation = 0;
+    }
+
+    if(engine.isometricMode && tX == x && tY == y && !engine.useFastRenderMode && (tileWidth > 1 || tileHeight > 1)) {
+        return drawBigStationary(
+            engine, 
+            img, 
+            x, 
+            y, 
+            tX, 
+            tY, 
+            step, 
+            meterPercent, 
+            meterColor, 
+            alpha, 
+            zIndex, 
+            tileWidth, 
+            tileHeight, 
+            chevrons, 
+            angle, 
+            centerChevrons, 
+            textLabel, 
+            yOffset, 
+            scale, 
+            textSize, 
+            textFont, 
+            textYOffset, 
+            meterYOffset, 
+            elevation
+        );
+    }
+
+
+    const item = getFreshRenderItem(engine);
+    item.tX = x;
+    item.tY = y;
+    item.blocksLight = false;
+    item.angle = angle;
+    item.img = img;
+    item.zIndex = zIndex;
+    item.tileHeight = tileHeight;
+    item.tileWidth = tileWidth;
+    item.alpha = alpha;
+    // Defensive: never let main sprite/building be flagged for overlay
+    item.renderAboveLighting = false;
+
+    let dX, dY;
+    let dW = img.width * scale;
+    let dH = img.height * scale;
+
+    if(engine.zoomLevel != 1) {
+        dW *= engine.zoomLevel;
+        dH *= engine.zoomLevel;
+    }
+
+    let nearness = y;
+
+    if(engine.isometricMode) {
+
+        const lastTileX = x + tileWidth - 1;
+        const lastTileY = y + tileHeight - 1;
+
+        const rightIsoX = (lastTileX - (y - yOffset)) * engine.halfRelativeGridSize;
+        const bottomIsoY = (lastTileX + (lastTileY - yOffset)) *  engine.quarterRelativeGridSize;
+
+        const totalBottom = bottomIsoY + engine.halfRelativeGridSize;
+        const totalRight = rightIsoX + engine.halfRelativeGridSize;
+
+        dX = totalRight - dW;
+        dY = totalBottom - dH;
+
+        nearness = lastTileX + lastTileY;
+    } else {
+        dX = x * engine.relativeGridSize;
+        dY = (((y - yOffset) * engine.relativeGridSize) + engine.relativeGridSize) - dH;
+    }
+
+    if(x != tX || y != tY) {
+        const stepDistance = engine.twentiethGridSize * step;
+
+        if(engine.isometricMode) {
+            let nX = x;
+            let nY = y;
+
+            if(tX > x) {
+                dX += stepDistance / 2;
+                dY += stepDistance / 4;
+
+                nX += 2;
+            }
+
+            if(tX < x) {
+                dX -= stepDistance / 2;
+                dY -= stepDistance / 4;
+
+                nX++;
+            }
+
+            if(tY > y) {
+                dX -= stepDistance / 2;
+                dY += stepDistance / 4;
+
+                nY += 2;
+            }
+
+            if(tY < y) {
+                dX += stepDistance / 2;
+                dY -= stepDistance / 4;
+
+                nY++;
+            }
+
+            nearness = nX + nY;
+        } else {
+            if(tX > x) {
+                dX += stepDistance;
+            }
+
+            if(tX < x) {
+                dX -= stepDistance;
+            }
+
+            if(tY > y) {
+                dY += stepDistance;
+            }
+
+            if(tY < y) {
+                dY -= stepDistance;
+            }
+        }
+    }
+
+    if(elevation > 0) {
         produceShadow(engine, x, y, zIndex, tileWidth);
         nearness += elevation;
-        dY -= Math.round((elevation & engine.gridSize) * engine.zoomLevel);
+        dY -= Math.round((elevation * engine.gridSize) * engine.zoomLevel);
     }
 
     item.x = dX;
@@ -3323,7 +4161,7 @@ function drawBigStationary(engine, img, x, y, tX, tY, step, meterPercent, meterC
         if(elevation) {
             if(i == 0) {
                 produceShadow(engine, x, y, zIndex, tileWidth);
-                dY -= Math.round((elevation & engine.gridSize) * engine.zoomLevel);
+                dY -= Math.round((elevation * engine.gridSize) * engine.zoomLevel);
             }
             
             nearness += elevation;
@@ -3401,6 +4239,7 @@ function handleMeterAndChevrons(engine, y, dX, dY, dW, dH, meterPercent, meterCo
         }
 
         barItem.zIndex = zIndex + 1;
+        barItem.renderAboveLighting = true;
 
         engine.aboveFoldDrawQueue.push(barItem);
     }
@@ -3458,6 +4297,7 @@ function handleMeterAndChevrons(engine, y, dX, dY, dW, dH, meterPercent, meterCo
             }
 
             chevItem.zIndex = zIndex + 1;
+            chevItem.renderAboveLighting = true;
 
             engine.aboveFoldDrawQueue.push(chevItem);
 
@@ -3488,6 +4328,7 @@ function handleTextLabel(engine, textLabel, textFont, textSize, dX, dY, dW, dH, 
     }
 
     textItem.zIndex = zIndex + 1;
+    textItem.renderAboveLighting = true;
 
     engine.drawQueue.push(textItem);
 }
@@ -3613,6 +4454,7 @@ function doDrawText(engine, text, x, y, color, stroke, size, font, zIndex) {
 
     item.color = color;
     item.barColor = stroke;
+    item.renderAboveLighting = true;
 
     engine.drawQueue.push(item);
 }
@@ -3621,7 +4463,7 @@ function processUpdate(engine, timestamp, delta) {
     engine.lightSources = [];
 
     if(engine.mouseScrolling.up || engine.mouseScrolling.down || engine.mouseScrolling.left || engine.mouseScrolling.right) {
-        engine.changed = true;
+        engine.alertStaticChanged();
 
         if(engine.mouseScrolling.up) {
             engine.viewY -= 40 * delta;
@@ -3643,12 +4485,7 @@ function processUpdate(engine, timestamp, delta) {
         engine.notifyViewportChange(true);
     }
 
-    engine.gamepadNegotiationTimer += delta;
-
-    if(engine.gamepadNegotiationTimer >= 4) {
-        engine.gamepadNegotiationTimer = 0;
-        performGamepadUpdate(engine);
-    }
+    performGamepadUpdate(engine, delta);
 
     if(!engine.updateFunction) {
         return;
@@ -3670,128 +4507,69 @@ function processUpdate(engine, timestamp, delta) {
     }
 }
 
-function performGamepadUpdate(engine) {
+function performGamepadUpdate(engine, delta) {
+
+    const deadZone = 0.1;
+
     let didHover = false;
 
-    if(engine.padScrolling.up && !engine.padScrolling.down && !engine.padScrolling.left && !engine.padScrolling.right) {
-        engine.lastHoverY--;
-
-        if(engine.isometricMode) {
-            engine.lastHoverX--;
-        }
-
+    if(engine.gamepadRef.up) {
+        engine.scrollViewBy(0, -engine.gamepadScrollRate * delta);
         didHover = true;
     }
 
-    if(engine.padScrolling.down && !engine.padScrolling.up && !engine.padScrolling.left && !engine.padScrolling.right) {
-        engine.lastHoverY++;
-
-        if(engine.isometricMode) {
-            engine.lastHoverX++;
-        }
-
+    if(engine.gamepadRef.down) {
+        engine.scrollViewBy(0, engine.gamepadScrollRate * delta);
         didHover = true;
     }
 
-    if(engine.padScrolling.left && !engine.padScrolling.right && !engine.padScrolling.up && !engine.padScrolling.down) {
-        engine.lastHoverX--;
-
-        if(engine.isometricMode) {
-            engine.lastHoverY++;
-        }
-
+    if(engine.gamepadRef.left) {
+        engine.scrollViewBy(-engine.gamepadScrollRate * delta, 0);
         didHover = true;
     }
 
-    if(engine.padScrolling.right && !engine.padScrolling.left && !engine.padScrolling.up && !engine.padScrolling.down) {
-        engine.lastHoverX++;
-
-        if(engine.isometricMode) {
-            engine.lastHoverY--;
-        }
-
+    if(engine.gamepadRef.right) {
+        engine.scrollViewBy(engine.gamepadScrollRate * delta, 0);
         didHover = true;
     }
 
-    if(engine.padScrolling.up && !engine.padScrolling.down && !engine.padScrolling.left && engine.padScrolling.right) {
-        engine.lastHoverY--;
-
-        if(engine.isometricMode) {
-            engine.lastHoverX++;
+    if(engine.gamepadRef.axis) {
+        if(engine.gamepadRef.axis.rightX > deadZone || engine.gamepadRef.axis.rightX < -deadZone) {
+            engine.scrollViewBy(engine.gamepadRef.axis.rightX * engine.gamepadScrollRate * delta, 0);
+            didHover = true;
         }
 
-        didHover = true;
-    }
-
-    if(engine.padScrolling.down && !engine.padScrolling.up && !engine.padScrolling.left && engine.padScrolling.right) {
-        engine.lastHoverY++;
-
-        if(engine.isometricMode) {
-            engine.lastHoverX--;
+        if(engine.gamepadRef.axis.rightY > deadZone || engine.gamepadRef.axis.rightY < -deadZone) {
+            engine.scrollViewBy(0, engine.gamepadRef.axis.rightY * engine.gamepadScrollRate * delta);
+            didHover = true;
         }
 
-        didHover = true;
-    }
-
-    if(engine.padScrolling.left && !engine.padScrolling.right && !engine.padScrolling.up && engine.padScrolling.down) {
-        engine.lastHoverX--;
-
-        if(engine.isometricMode) {
-            engine.lastHoverY--;
+        if(engine.gamepadRef.axis.leftX > deadZone || engine.gamepadRef.axis.leftX < -deadZone) {
+            engine.scrollViewBy(engine.gamepadRef.axis.leftX * engine.gamepadScrollRate * delta * 2, 0);
+            didHover = true;
         }
 
-        didHover = true;
-    }
-
-    if(engine.padScrolling.right && !engine.padScrolling.left && !engine.padScrolling.up && engine.padScrolling.down) {
-        engine.lastHoverX++;
-
-        if(engine.isometricMode) {
-            engine.lastHoverY++;
+        if(engine.gamepadRef.axis.leftY > deadZone || engine.gamepadRef.axis.leftY < -deadZone) {
+            engine.scrollViewBy(0, engine.gamepadRef.axis.leftY * engine.gamepadScrollRate * delta * 2);
+            didHover = true;
         }
-
-        didHover = true;
     }
 
     if(didHover && engine.hoverFunction) {
-        engine.hoverFunction(engine.lastHoverX, engine.lastHoverY, 0, 0, "gamepad", engine.lastHoverX, engine.lastHoverY);
-        engine.centerOnCoord(engine.lastHoverX, engine.lastHoverY);
+        const center = engine.getCenterPosition();
+
+        engine.lastHoverX = center.x;
+        engine.lastHoverY = center.y;
+
+        engine.hoverFunction(engine.lastHoverX, engine.lastHoverY, center.ax, center.ay, "gamepad", center.px, center.py);
     }
 
-    let didScroll = false;
-
-    if(engine.padRightScrolling.left) {
-        engine.viewX -= 40;
-        didScroll = true;
+    if(engine.gamepadRef.rb) {
+        engine.zoomBy(0.08 * delta);
     }
 
-    if(engine.padRightScrolling.right) {
-        engine.viewX += 40;
-        didScroll = true;
-    }
-
-    if(engine.padRightScrolling.up) {
-        engine.viewY -= 40;
-        didScroll = true;
-    }
-
-    if(engine.padRightScrolling.down) {
-        engine.viewY += 40;
-        didScroll = true;
-    }
-
-    if(didScroll) {
-        engine.changed();
-        engine.notifyViewportChange(true);
-        engine.checkBounds();
-    }
-
-    if(engine.padTriggers.right && !engine.padTriggers.left) {
-        engine.doZoom(true);
-    }
-
-    if(engine.padTriggers.left && !engine.padTriggers.right) {
-        engine.doZoom(false);
+    if(engine.gamepadRef.lb) {
+        engine.zoomBy(-0.08 * delta);
     }
 }
 
@@ -3812,6 +4590,7 @@ function doDrawLine(engine, color, x, y, x2, y2, zIndex, centerInTile, lineWidth
     item.lineWidth = lineWidth;
     item.zIndex = zIndex;
     item.dashedLine = dashed;
+    item.renderAboveLighting = true;
 
     if(engine.isometricMode) {
         const l1x = (x - y) * engine.halfRelativeGridSize;
@@ -3967,97 +4746,32 @@ function getGroupRegionLines(tilesArray) {
 }
 
 function onGamepadDown(engine, button) {
-    if(button == "lt") {
-        engine.padTriggers.left = true;
-    }
 
-    if(button == "rt") {
-        engine.padTriggers.right = true;
-    }
+    engine.gamepadRef[button] = true;
 
-    if(button == "up") {
-        engine.padScrolling.up = true;
-        engine.padScrolling.down = false;
-    }
-
-    if(button == "down") {
-        engine.padScrolling.down = true;
-        engine.padScrolling.up = false;
-    }
-
-    if(button == "left") {
-        engine.padScrolling.left = true;
-        engine.padScrolling.right = false;
-    }
-
-    if(button == "right") {
-        engine.padScrolling.right = true;
-        engine.padScrolling.left = false;
-    }
-
-    if(button == "rup") {
-        engine.padRightScrolling.up = true;
-    }
-
-    if(button == "rdown") {
-        engine.padRightScrolling.down = true;
-    }
-
-    if(button == "rleft") {
-        engine.padRightScrolling.left = true;
-    }
-
-    if(button == "rright") {
-        engine.padRightScrolling.right = true;
-    }
-
-    if(button == "a") {
+    if(button == "a" || button == "rt") {
         engine.aDownTime = new Date().getTime();
     }
+
+    if(button == "lt") {
+        engine.ltDownTime = new Date().getTime();
+    }
+
+}
+
+function onGamepadAxis(engine, axis, value) {
+    if(!engine.gamepadRef.axis) {
+        engine.gamepadRef.axis = {};
+    }
+
+    engine.gamepadRef.axis[axis] = value;
 }
 
 function onGamepadUp(engine, button) {
-    if(button == "lt") {
-        engine.padTriggers.left = false;
-    }
 
-    if(button == "rt") {
-        engine.padTriggers.right = false;
-    }
+    engine.gamepadRef[button] = false;
 
-    if(button == "up") {
-        engine.padScrolling.up = false;
-    }
-
-    if(button == "down") {
-        engine.padScrolling.down = false;
-    }
-
-    if(button == "left") {
-        engine.padScrolling.left = false;
-    }
-
-    if(button == "right") {
-        engine.padScrolling.right = false;
-    }
-
-    if(button == "rup") {
-        engine.padRightScrolling.up = false;
-    }
-
-    if(button == "rdown") {
-        engine.padRightScrolling.down = false;
-    }
-
-    if(button == "rleft") {
-        engine.padRightScrolling.left = false;
-    }
-
-    if(button == "rright") {
-        engine.padRightScrolling.right = false;
-    }
-
-    if(button == "a") {
+    if(button == "a" || button == "rt") {
         const aUpTime = new Date().getTime();
 
         if(aUpTime - engine.aDownTime < 400 && engine.clickFunction) {
@@ -4066,9 +4780,21 @@ function onGamepadUp(engine, button) {
 
         engine.aDownTime = 0;
     }
+
+    if(button == "lt") {
+        const ltUpTime = new Date().getTime();
+
+        if(ltUpTime - engine.ltDownTime < 400 && engine.rightClickFunction) {
+            engine.rightClickFunction(engine.lastHoverX, engine.lastHoverY, 0, 0, "gamepad", engine.lastHoverX, engine.lastHoverY);
+        }
+
+        engine.ltDownTime = 0;
+    }
 }
 
-function doDrawLight(engine, x, y, radius, color, tX, tY, step, intensity) {
+
+
+function doDrawLight(engine, x, y, radius, color, tX, tY, step, intensity, mode = "glow") {
     if(!engine.checkVisibility(x, y) && !engine.fullMapRenderCallback) {
         return;
     }
@@ -4129,7 +4855,53 @@ function doDrawLight(engine, x, y, radius, color, tX, tY, step, intensity) {
         }
     }
 
-    engine.lightSources.push(getFreshLightInstruction(ux, uy, useRadius, rgbColor, intensity));
+    engine.lightSources.push(getFreshLightInstruction(ux, uy, useRadius, rgbColor, intensity, mode));
+}
+
+function getLightMaskColor(color) {
+    if(!color) {
+        return { r: 255, g: 255, b: 255 };
+    }
+
+    const r = clampLightChannel(color.r);
+    const g = clampLightChannel(color.g);
+    const b = clampLightChannel(color.b);
+
+    const max = Math.max(r, g, b);
+
+    if(max <= 0) {
+        return { r: 255, g: 255, b: 255 };
+    }
+
+    // Normalize hue first, then mix toward white so tinted lights still illuminate
+    // instead of becoming subtractive in multiply-based darkness masks.
+    const nr = Math.round((r / max) * 255);
+    const ng = Math.round((g / max) * 255);
+    const nb = Math.round((b / max) * 255);
+
+    const tintStrength = 0.35;
+
+    return {
+        r: Math.round(255 - ((255 - nr) * tintStrength)),
+        g: Math.round(255 - ((255 - ng) * tintStrength)),
+        b: Math.round(255 - ((255 - nb) * tintStrength))
+    };
+}
+
+function clampLightChannel(value) {
+    if(value == null || isNaN(value)) {
+        return 0;
+    }
+
+    if(value < 0) {
+        return 0;
+    }
+
+    if(value > 255) {
+        return 255;
+    }
+
+    return Math.round(value);
 }
 
 /**
@@ -4141,7 +4913,7 @@ function doDrawLight(engine, x, y, radius, color, tX, tY, step, intensity) {
  * @param {number} i - The intensity of the light source.
  * @returns {LightInstruction} - A new or recycled LightInstruction object.
  */
-function getFreshLightInstruction(x,y,r,c,i) {
+function getFreshLightInstruction(x,y,r,c,i,m = "glow") {
     if(lightInstructionRecycling.length > 0) {
         const fresh = lightInstructionRecycling.pop();
         fresh.x = x;
@@ -4149,9 +4921,10 @@ function getFreshLightInstruction(x,y,r,c,i) {
         fresh.radius = r;
         fresh.color = c;
         fresh.intensity = i;
+        fresh.mode = m;
         return fresh;
     } else {
-        return new LightInstruction(x, y, r, c, i);
+        return new LightInstruction(x, y, r, c, i, m);
     }
 }
 
@@ -4165,13 +4938,311 @@ export function pixelateCanvas(canvas) {
     ctx.msImageSmoothingEnabled = false;
 }
 
+function handleImageLightmap(engine, item, fullContext) {
+    let useX, useY;
+
+    if(engine.isometricMode) {
+        useX = item.x - engine.viewX;
+        useY = item.y - engine.viewY;
+        
+    } else {
+        useX = (0.5 + (item.x - engine.viewX)) | 0;
+        useY = (0.5 + (item.y - engine.viewY)) | 0;
+    }
+
+    applyLightmapOcclusion(engine, item, useX, useY);
+
+    
+    const renderImage = getProcessedLightmap(item.img);
+
+    if(renderImage) {
+        item.img = renderImage;
+    }
+
+    performStandardRender(engine, engine.lightSpriteRenderContext, item, useX, useY, fullContext);
+
+    usedRenderObjects.push(item);
+}
+
+function applyLightmapOcclusion(engine, item, useX, useY) {
+    if(!item || !item.blockerImg) {
+        return;
+    }
+
+    const previousComposite = engine.lightSpriteRenderContext.globalCompositeOperation;
+    const previousAlpha = engine.lightSpriteRenderContext.globalAlpha;
+    const previousImage = item.img;
+    const previousItemAlpha = item.alpha;
+
+    item.img = item.blockerImg;
+    item.alpha = 1;
+
+    engine.lightSpriteRenderContext.globalCompositeOperation = "destination-out";
+    engine.lightSpriteRenderContext.globalAlpha = 1;
+
+    performStandardRender(engine, engine.lightSpriteRenderContext, item, useX, useY, null);
+
+    item.img = previousImage;
+    item.alpha = previousItemAlpha;
+    engine.lightSpriteRenderContext.globalCompositeOperation = previousComposite;
+    engine.lightSpriteRenderContext.globalAlpha = previousAlpha;
+}
+
+function getProcessedLightmap(img) {
+    if(!img || !img.width || !img.height) {
+        return img;
+    }
+
+    if(processedLightmaps.has(img)) {
+        return processedLightmaps.get(img);
+    }
+
+    const processedCanvas = document.createElement("canvas");
+    processedCanvas.width = img.width;
+    processedCanvas.height = img.height;
+
+    const processedContext = processedCanvas.getContext("2d", { willReadFrequently: true });
+
+    if(!processedContext) {
+        processedLightmaps.set(img, img);
+        return img;
+    }
+
+    processedContext.drawImage(img, 0, 0);
+
+    try {
+        const imageData = processedContext.getImageData(0, 0, processedCanvas.width, processedCanvas.height);
+        const pixels = imageData.data;
+
+        for(let i = 0; i < pixels.length; i += 4) {
+            const r = pixels[i];
+            const g = pixels[i + 1];
+            const b = pixels[i + 2];
+
+            // Treat fully black and near-black pixels as transparent background in lightmaps.
+            if(r <= 35 && g <= 35 && b <= 35) {
+                pixels[i + 3] = 0;
+            }
+        }
+
+        processedContext.putImageData(imageData, 0, 0);
+    } catch {
+        // If pixel reads are blocked (tainted canvas), fall back to the original image.
+        processedLightmaps.set(img, img);
+        return img;
+    }
+
+    processedLightmaps.set(img, processedCanvas);
+    return processedCanvas;
+}
+
+function wireUpGlContext(engine) {
+
+    const gl = engine.postProcessContext;
+
+    const program = gl.createProgram();
+    gl.attachShader(program, createShader(gl, gl.VERTEX_SHADER, vsSource));
+    gl.attachShader(program, createShader(gl, gl.FRAGMENT_SHADER, fsSource));
+    gl.linkProgram(program);
+    gl.useProgram(program);
+
+    // Setup a simple rectangle (2 triangles)
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+
+    const posAttrib = gl.getAttribLocation(program, "aPosition");
+    gl.enableVertexAttribArray(posAttrib);
+    gl.vertexAttribPointer(posAttrib, 2, gl.FLOAT, false, 0, 0);
+
+    // Create the texture that will hold the 2D engine's pixels
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+    engine.glProgram = program;
+    engine.glTexture = texture;
+    engine.timeLoc = gl.getUniformLocation(program, "uTime");
+
+    engine.glLocations = {
+        uUseGrayscale: gl.getUniformLocation(program, "uUseGrayscale"),
+        uUseScanlines: gl.getUniformLocation(program, "uUseScanlines"),
+        uUseVignette: gl.getUniformLocation(program, "uUseVignette"),
+        uUseTiltShift: gl.getUniformLocation(program, "uUseTiltShift"),
+        uUseFog: gl.getUniformLocation(program, "uUseFog"),
+        uFogColor: gl.getUniformLocation(program, "uFogColor"),
+        uFogDensity: gl.getUniformLocation(program, "uFogDensity"),
+        uFogUniformity: gl.getUniformLocation(program, "uFogUniformity"),
+        uBlurAmount: gl.getUniformLocation(program, "uBlurAmount")
+    };
+}
+
+/**
+ * THE PRO BAKER
+ * Generates a high-detail, seamless liquid sprite strip.
+ */
+function createLiquidTexture(options = {}) {
+    const {
+        frameCount = 60,
+        baseWidth = 64, // Higher res baking = sharper glints
+        isIsometric = true,
+        baseColor = [15, 45, 85],    // Darker Navy for depth
+        rippleColor = [40, 100, 160], // Mid-tone Steel Blue
+        speed = 0.75,
+        scale = 1.5,
+        glint = 0.87,
+        glintBoost = 2.0,
+        lightmapMode = false,        // When true, generate an emissive lightmap instead of full color
+        emissiveColor = null         // Emissive glow color [r, g, b]; defaults to rippleColor
+    } = options;
+
+    const baseHeight = isIsometric ? baseWidth / 2 : baseWidth;
+    const canvas = document.createElement('canvas');
+    canvas.width = baseWidth * frameCount;
+    canvas.height = baseHeight;
+    const ctx = canvas.getContext('2d');
+
+    // Resolve the emissive color — fallback to rippleColor brightened
+    const lmColor = emissiveColor || rippleColor;
+
+    let scaleY = scale;
+
+    if(isIsometric) {
+        scaleY = scale * 2; // Compensate for the 2:1 pixel ratio in isometric sprites
+    }
+
+    const noise = new FastSimplex(); 
+
+    for (let f = 0; f < frameCount; f++) {
+        const frameX = f * baseWidth;
+        const angle = (f / frameCount) * Math.PI * 2;
+        const tx = Math.cos(angle) * speed;
+        const ty = Math.sin(angle) * speed;
+        
+        const imgData = ctx.createImageData(baseWidth, baseHeight);
+        
+        for (let y = 0; y < baseHeight; y++) {
+            for (let x = 0; x < baseWidth; x++) {
+                const i = (y * baseWidth + x) * 4;
+
+                // 1. INCREASE FREQUENCY (Scale)
+                // This puts more "waves" inside the 64x32 area.
+                const nx = x * scale; 
+                const ny = y * scaleY; // Double Y scale to account for Iso 2:1 ratio
+        
+                // 2. SEAMLESS LOOP MATH
+                const angle = (f / frameCount) * Math.PI * 2;
+                const uTime = Math.cos(angle) * speed;
+                const vTime = Math.sin(angle) * speed;
+
+                // 3. LAYERED "SPARKLE" NOISE
+                // Layer A: Base movement
+                let n = noise.noise4D(nx, ny, uTime, vTime) * 0.5;
+                // Layer B: High-frequency glitter (The "Sparkles")
+                n += noise.noise4D(nx * 2.0, ny * 2.0, uTime * 2.0, vTime * 2.0) * 0.5;
+
+                let val = (n + 1.0) * 0.5; 
+
+                // 4. THE SPECULAR THRESHOLD (The Secret Sauce)
+                // Instead of a smooth curve, we "clamp" the top values.
+                // This makes tiny sharp white dots instead of large faded blobs.
+                let sparkle = Math.max(0.0, val - glint) * 5.0; // Only values > 0.8 become bright
+                sparkle = Math.pow(sparkle, glintBoost);
+
+                if(lightmapMode) {
+                    // Lightmap / emissive mode: dark background, bright emissive areas.
+                    // The noise value drives the emissive brightness so the glow
+                    // pulses and ripples in sync with the main liquid animation.
+                    const emissiveBrightness = Math.pow(val, 1.5);
+                    const sparkleBrightness = sparkle * 1.5;
+                    imgData.data[i]     = Math.min(255, (lmColor[0] * emissiveBrightness) + (sparkleBrightness * 255.0));
+                    imgData.data[i + 1] = Math.min(255, (lmColor[1] * emissiveBrightness) + (sparkleBrightness * 255.0));
+                    imgData.data[i + 2] = Math.min(255, (lmColor[2] * emissiveBrightness) + (sparkleBrightness * 255.0));
+                    imgData.data[i + 3] = 255;
+                } else {
+                    // Mix deep water color with the sparkle
+                    imgData.data[i]     = lerp(baseColor[0], rippleColor[0], val) + (sparkle * 255.0);
+                    imgData.data[i + 1] = lerp(baseColor[1], rippleColor[1], val) + (sparkle * 255.0);
+                    imgData.data[i + 2] = lerp(baseColor[2], rippleColor[2], val) + (sparkle * 255.0);
+                    imgData.data[i + 3] = 255;
+                }
+            }
+        }
+        
+        if (isIsometric) applyIsoMask(imgData, baseWidth, baseHeight);
+        ctx.putImageData(imgData, frameX, 0);
+    }
+    return canvas;
+}
+
+// Helper: Linearly interpolates between two values
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+class FastSimplex {
+    constructor() {
+        this.p = new Uint8Array(256);
+        for(let i=0; i<256; i++) this.p[i] = i;
+        for(let i=255; i>0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [this.p[i], this.p[j]] = [this.p[j], this.p[i]];
+        }
+        this.perm = new Uint8Array(512);
+        this.permMod12 = new Uint8Array(512);
+        for(let i=0; i<512; i++) {
+            this.perm[i] = this.p[i & 255];
+            this.permMod12[i] = this.perm[i] % 12;
+        }
+    }
+
+    // Standard 4D Gradients
+    grad(hash, x, y, z, t) {
+        const h = hash & 31;
+        const u = h < 24 ? x : y;
+        const v = h < 16 ? y : z;
+        const w = h < 8 ? z : t;
+        return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v) + ((h & 4) === 0 ? w : -w);
+    }
+
+    noise4D(x, y, z, w) {
+        const F4 = (Math.sqrt(5.0) - 1.0) / 4.0;
+        const G4 = (5.0 - Math.sqrt(5.0)) / 20.0;
+        let n0, n1, n2, n3, n4;
+        const s = (x + y + z + w) * F4;
+        const i = Math.floor(x + s), j = Math.floor(y + s), k = Math.floor(z + s), l = Math.floor(w + s);
+        const t = (i + j + k + l) * G4;
+        const X0 = i - t, Y0 = j - t, Z0 = k - t, W0 = l - t;
+        const x0 = x - X0, y0 = y - Y0, z0 = z - Z0, w0 = w - W0;
+
+        // Simplified sorting logic for a clean 2D bake
+        const res = Math.sin(i * 0.12) + Math.sin(j * 0.33) + Math.sin(k * 0.44) + Math.sin(l * 0.55);
+        return Math.sin(res + x0 + y0 + z0 + w0); 
+    }
+}
+
+function applyIsoMask(imgData, w, h) {
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = (y * w + x) * 4;
+            // Change 1.0 to 1.1 to allow a "bleed" area
+            // This prevents those tiny gaps between buildings and water
+            const dist = Math.abs(x - w/2 + 0.5)/(w/2) + Math.abs(y - h/2 + 0.5)/(h/2);
+            if (dist > 1.1) { 
+                imgData.data[i+3] = 0;
+            }
+        }
+    }
+}
+
 export default {
     getInstance,
     globalResize,
     hexToRgb,
     Scroll2dEngine,
     Chevron,
-    pixelateCanvas
+    pixelateCanvas,
+    createLiquidTexture
 };
 
 requestAnimationFrame(globalRender);
