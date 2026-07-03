@@ -1,6 +1,6 @@
 import { hexToRGB, distBetweenPoints, removeFromArray, guid } from "common-helpers";
 import { handleInput, clearElementForTouch } from "input-helper";
-import particles2 from "particles2";
+import particles2 from "./particles3.js";
 
 window.addEventListener("resize", globalResize);
 
@@ -385,6 +385,12 @@ export class Scroll2dEngine {
         this.preRenderContext = this.preRenderCanvas.getContext("2d");
         this.gradientFilterContext = this.gradientFilterCanvas.getContext("2d");
 
+        this.postProcessingEnabled = options.postProcessingEnabled !== undefined ? !!options.postProcessingEnabled : true;
+
+        if(options.disablePostProcessingPass === true) {
+            this.postProcessingEnabled = false;
+        }
+
         if(this.pixelated) {
             pixelateCanvas(this.canvas);
             pixelateCanvas(this.overlayCanvas);
@@ -399,6 +405,7 @@ export class Scroll2dEngine {
             pixelateCanvas(this.gradientFilterCanvas);
         }
 
+        this.holder.appendChild(this.canvas);
         this.holder.appendChild(this.postProcessCanvas);
         this.holder.appendChild(this.overlayCanvas);
         this.holder.appendChild(this.filterOverlay);
@@ -423,13 +430,16 @@ export class Scroll2dEngine {
             onInstanceWheel(instance, e);
         });
 
+        absoluteAndFillElement(this.canvas);
         absoluteAndFillElement(this.postProcessCanvas);
         absoluteAndFillElement(this.overlayCanvas);
         absoluteAndFillElement(this.filterOverlay);
 
+        this.canvas.style.pointerEvents = "none";
         this.overlayCanvas.style.pointerEvents = "none";
 
         this.normalizeFilterOverlaySize();
+        updateDisplayCanvasMode(this);
         this.gamepadAllStop();
 
         setTimeout(function() {
@@ -495,6 +505,15 @@ export class Scroll2dEngine {
         if(blur !== undefined) {
             this.postProcessSettings.fog.blur = blur;
         }
+    }
+
+    setPostProcessingEnabled(enabled) {
+        this.postProcessingEnabled = !!enabled;
+        updateDisplayCanvasMode(this);
+    }
+
+    getPostProcessingEnabled() {
+        return this.postProcessingEnabled;
     }
 
     destroy() {
@@ -2216,6 +2235,20 @@ function renderOverlayPass(engine, postProcessOverlayQueue, postProcessLightOver
     postProcessOverlayQueue.length = 0;
 }
 
+function updateDisplayCanvasMode(engine) {
+    if(!engine || !engine.canvas || !engine.postProcessCanvas) {
+        return;
+    }
+
+    if(engine.postProcessingEnabled) {
+        engine.canvas.style.display = "none";
+        engine.postProcessCanvas.style.display = "block";
+    } else {
+        engine.postProcessCanvas.style.display = "none";
+        engine.canvas.style.display = "block";
+    }
+}
+
 function revealClearLights(engine, context, clearSources) {
     const revealContext = engine.clearRevealContext;
     const maskContext = engine.clearMaskContext;
@@ -2253,7 +2286,18 @@ function revealClearLights(engine, context, clearSources) {
 }
 
 function renderScrollPostProcessing(engine, delta, time) {
+    void delta;
+    void time;
+
+    if(!engine.postProcessingEnabled) {
+        return;
+    }
+
     const gl = engine.postProcessContext;
+
+    if(!gl || !engine.glProgram || !engine.glTexture || !engine.glLocations) {
+        return;
+    }
 
     // Step B: Update WebGL with the 2D Canvas content
     gl.useProgram(engine.glProgram);
@@ -5039,6 +5083,12 @@ function getProcessedLightmap(img) {
 function wireUpGlContext(engine) {
 
     const gl = engine.postProcessContext;
+
+    if(!gl) {
+        engine.postProcessingEnabled = false;
+        updateDisplayCanvasMode(engine);
+        return;
+    }
 
     const program = gl.createProgram();
     gl.attachShader(program, createShader(gl, gl.VERTEX_SHADER, vsSource));
