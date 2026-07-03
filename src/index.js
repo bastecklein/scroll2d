@@ -472,6 +472,14 @@ export class Scroll2dEngine {
         wireUpGlContext(this);
     }
 
+    setAutoScale(enabled) {
+        this.autoScale = !!enabled;
+    }
+
+    setScale(scale) {
+        this.scale = scale;
+    }
+
     setGrayscale(enabled) {
         this.postProcessSettings.grayscale = enabled;
     }
@@ -1727,6 +1735,15 @@ function resizeInstance(engine) {
     engine.staticContext.setTransform(1, 0, 0, 1, 0, 0);
     engine.staticContext.scale(engine.scale, engine.scale);
 
+    engine.lightContext.setTransform(1, 0, 0, 1, 0, 0);
+    engine.lightContext.scale(engine.scale, engine.scale);
+
+    engine.lightFinalRenderContext.setTransform(1, 0, 0, 1, 0, 0);
+    engine.lightFinalRenderContext.scale(engine.scale, engine.scale);
+
+    engine.lightSpriteRenderContext.setTransform(1, 0, 0, 1, 0, 0);
+    engine.lightSpriteRenderContext.scale(engine.scale, engine.scale);
+
     engine.setRelativeGridSize();
 
     engine.mapTotalWidth = engine.mapWidth * engine.relativeGridSize;
@@ -1881,7 +1898,7 @@ function renderScrollInstance(engine, delta, time) {
     }
 
     if(engine.changed) {
-        engine.staticContext.clearRect(0, 0, engine.width, engine.height);
+        engine.staticContext.clearRect(0, 0, engine.winWidth, engine.winHeight);
         engine.staticContext.save();
         engine.staticContext.translate(-engine.viewX, -engine.viewY);
 
@@ -1892,9 +1909,9 @@ function renderScrollInstance(engine, delta, time) {
         engine.changed = false;
     }
 
-    engine.context.clearRect(0, 0, engine.width, engine.height);
+    engine.context.clearRect(0, 0, engine.winWidth, engine.winHeight);
     engine.context.globalCompositeOperation = "source-over";
-    engine.overlayContext.clearRect(0, 0, engine.width, engine.height);
+    engine.overlayContext.clearRect(0, 0, engine.winWidth, engine.winHeight);
 
     if(engine.staticCanvas && engine.staticCanvas.width > 0) {
         engine.context.save();
@@ -1959,12 +1976,12 @@ function renderScrollInstance(engine, delta, time) {
         }
 
         engine.lightContext.fillStyle = useOff;
-        engine.lightContext.clearRect(0, 0, engine.width, engine.height);
-        engine.lightContext.fillRect(0, 0, engine.width, engine.height);
+        engine.lightContext.clearRect(0, 0, engine.winWidth, engine.winHeight);
+        engine.lightContext.fillRect(0, 0, engine.winWidth, engine.winHeight);
 
-        engine.lightFinalRenderContext.clearRect(0, 0, engine.width, engine.height);
+        engine.lightFinalRenderContext.clearRect(0, 0, engine.winWidth, engine.winHeight);
         engine.lightFinalRenderContext.globalCompositeOperation = "lighter";
-        engine.lightSpriteRenderContext.clearRect(0, 0, engine.width, engine.height);
+        engine.lightSpriteRenderContext.clearRect(0, 0, engine.winWidth, engine.winHeight);
         engine.lightSpriteRenderContext.globalCompositeOperation = "lighter";
 
         const imageLightSources = [];
@@ -2032,10 +2049,10 @@ function renderScrollInstance(engine, delta, time) {
 
         engine.lightContext.save();
         engine.lightContext.globalCompositeOperation = "source-over";
-        engine.lightContext.drawImage(engine.lightFinalRenderCanvas, 0, 0);
+        engine.lightContext.drawImage(engine.lightFinalRenderCanvas, 0, 0, engine.winWidth, engine.winHeight);
         engine.lightContext.globalCompositeOperation = "lighter";
         engine.lightContext.globalAlpha = engine.filterAmount;
-        engine.lightContext.drawImage(engine.lightSpriteRenderCanvas, 0, 0);
+        engine.lightContext.drawImage(engine.lightSpriteRenderCanvas, 0, 0, engine.winWidth, engine.winHeight);
         engine.lightContext.globalAlpha = 1;
         engine.lightContext.restore();
 
@@ -2058,7 +2075,7 @@ function renderScrollInstance(engine, delta, time) {
 
         engine.context.globalCompositeOperation = "multiply";
         //engine.context.drawImage(engine.lightFinalRenderCanvas, 0, 0);
-        engine.context.drawImage(engine.lightCanvas, 0, 0);
+        engine.context.drawImage(engine.lightCanvas, 0, 0, engine.winWidth, engine.winHeight);
         engine.context.restore();
     }
     
