@@ -2845,7 +2845,11 @@ function doStaticRender(engine, fullContext) {
         maxY = engine.mapHeight;
     }
 
-    for(let z = 0; z <= engine.staticMaxZIndex; z++) {
+    const staticZLayers = Array.from(engine.staticMap.keys()).sort(function(a, b) {
+        return a - b;
+    });
+
+    for(const z of staticZLayers) {
         for(let x = minX; x <= maxX; x++) {
             for(let y = minY; y <= maxY; y++) {
                 const renderItem = engine.getStaticItem(x, y, z);
@@ -3672,6 +3676,10 @@ function doDrawStaticTile(engine, img, x, y, zIndex = 0, alpha = 1) {
 
         if(renderOb) {
             renderOb.alpha = alpha;
+        }
+
+        if(zIndex > engine.staticMaxZIndex) {
+            engine.staticMaxZIndex = zIndex;
         }
         
 
