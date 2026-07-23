@@ -3648,9 +3648,6 @@ function doDrawStaticTile(engine, img, x, y, zIndex = 0, alpha = 1) {
         if(y < 0 || y > engine.mapHeight) {
             return;
         }
-        engine.initStaticMap();
-
-        engine.alertStaticChanged();
     }
 
     if(engine.fullMapRenderCallback) {
