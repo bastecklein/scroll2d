@@ -1644,6 +1644,7 @@ class TextPopItem {
         this.color = color;
         this.alpha = 1.0;
         this.cashed = false;
+        this.renderAboveLighting = true;
     }
 }
 
@@ -2120,7 +2121,7 @@ function renderScrollInstance(engine, delta, time) {
         if(popper.cashed) {
             popperKillArray.push(popper);
         } else {
-            renderTextPopper(engine, engine.context, popper);
+            renderTextPopper(engine, engine.overlayContext, popper);
         }
     }
 
