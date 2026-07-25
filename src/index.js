@@ -2115,22 +2115,6 @@ function renderScrollInstance(engine, delta, time) {
         engine.screenshotCallback = null;
     }
 
-    const popperKillArray = [];
-
-    for(const popper of engine.textPoppers) {
-        if(popper.cashed) {
-            popperKillArray.push(popper);
-        } else {
-            renderTextPopper(engine, engine.overlayContext, popper);
-        }
-    }
-
-    while(popperKillArray.length > 0) {
-        const popper = popperKillArray.pop();
-        removeFromArray(engine.textPoppers, popper);
-        usedPopperObjects.push(popper);
-    }
-
     if(engine.isSelection && !engine.isPinching) {
         engine.context.save();
         engine.context.globalAlpha = 1;
@@ -2200,6 +2184,22 @@ function renderScrollInstance(engine, delta, time) {
 
     renderScrollPostProcessing(engine, delta, time);
     renderOverlayPass(engine, postProcessOverlayQueue, postProcessLightOverlayInstructions);
+
+    const popperKillArray = [];
+
+    for(const popper of engine.textPoppers) {
+        if(popper.cashed) {
+            popperKillArray.push(popper);
+        } else {
+            renderTextPopper(engine, engine.overlayContext, popper);
+        }
+    }
+
+    while(popperKillArray.length > 0) {
+        const popper = popperKillArray.pop();
+        removeFromArray(engine.textPoppers, popper);
+        usedPopperObjects.push(popper);
+    }
 }
 
 function renderOverlayPass(engine, postProcessOverlayQueue, postProcessLightOverlayInstructions) {
