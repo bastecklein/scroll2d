@@ -1371,6 +1371,40 @@ export class Scroll2dEngine {
         }
     }
 
+    setPixelated(val) {
+        if(val === this.pixelated) {
+            return;
+        }
+
+        this.pixelated = val;
+
+        if(this.pixelated) {
+            pixelateCanvas(this.canvas);
+            pixelateCanvas(this.overlayCanvas);
+            pixelateCanvas(this.staticCanvas);
+            pixelateCanvas(this.lightCanvas);
+            pixelateCanvas(this.lightFinalRenderCanvas);
+            pixelateCanvas(this.lightSpriteRenderCanvas);
+            pixelateCanvas(this.scenePreLightingCanvas);
+            pixelateCanvas(this.clearRevealCanvas);
+            pixelateCanvas(this.clearMaskCanvas);
+            pixelateCanvas(this.preRenderCanvas);
+            pixelateCanvas(this.gradientFilterCanvas);
+        } else {
+            unPixelateCanvas(this.canvas);
+            unPixelateCanvas(this.overlayCanvas);
+            unPixelateCanvas(this.staticCanvas);
+            unPixelateCanvas(this.lightCanvas);
+            unPixelateCanvas(this.lightFinalRenderCanvas);
+            unPixelateCanvas(this.lightSpriteRenderCanvas);
+            unPixelateCanvas(this.scenePreLightingCanvas);
+            unPixelateCanvas(this.clearRevealCanvas);
+            unPixelateCanvas(this.clearMaskCanvas);
+            unPixelateCanvas(this.preRenderCanvas);
+            unPixelateCanvas(this.gradientFilterCanvas);
+        }
+    }
+
     normalizeFilterOverlaySize() {
         this.filterOverlay.style.top = "0px";
         this.filterOverlay.style.left = "0px";
@@ -4993,6 +5027,16 @@ function getFreshLightInstruction(x,y,r,c,i,m = "glow") {
     } else {
         return new LightInstruction(x, y, r, c, i, m);
     }
+}
+
+export function unPixelateCanvas(canvas) {
+    canvas.style.imageRendering = "auto";
+
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.mozImageSmoothingEnabled = true;
+    ctx.webkitImageSmoothingEnabled = true;
+    ctx.msImageSmoothingEnabled = true;
 }
 
 export function pixelateCanvas(canvas) {
